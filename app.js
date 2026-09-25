@@ -1,193 +1,361 @@
-/* leadday — mobile-first board on the tested leadday logic. Data: on-device only. */
-const L = window.leadday;
-const STORE_KEY = 'leadday.tasks.v1';
-
-const SPRINTS = [
-  { key: 'URGENT',   label: 'Urgent',    emoji: '🔥' },
-  { key: 'DEADLINE', label: 'Deadlines', emoji: '⏰' },
-  { key: 'ADMIN',    label: 'Admin',     emoji: '🗂️' },
-  { key: 'CREATIVE', label: 'Creative',  emoji: '🎨' },
+/* ChainPulse — Robinhood Chain winner discovery UI */
+const SCENARIOS = [
+  { id: 'all_winners', label: 'All winners', blurb: 'Winning wallets, bots off, pace capped' },
+  { id: 'conviction', label: 'Conviction', blurb: 'Longer holds, multi-token, low pace' },
+  { id: 'swing', label: 'Swing', blurb: 'Hours-to-day holds, not spray' },
+  { id: 'consistent', label: 'Multi-coin', blurb: '3+ tokens, win-rate floor' },
+  { id: 'sized', label: 'Sized', blurb: 'Higher volume winners' },
+  { id: 'early', label: 'Selective', blurb: 'Swing style + score sort' },
+  { id: 'fresh', label: 'Fresh', blurb: 'New opens still in profit' },
 ];
-const SPRINT_LABEL = Object.fromEntries(SPRINTS.map((s) => [s.key, s]));
 
-const URG = {
-  PAST_DUE:          { card: 'u-past',     badge: 'b-past',     label: 'Past Due',     icon: '🔴' },
-  DUE_TODAY:         { card: 'u-today',    badge: 'b-today',    label: 'Due Today',    icon: '🟡' },
-  DUE_TOMORROW:      { card: 'u-tomorrow', badge: 'b-tomorrow', label: 'Due Tomorrow', icon: '🟠' },
-  BETTER_START_SOON: { card: 'u-soon',     badge: 'b-soon',     label: 'Start Soon',   icon: '🟠' },
-  ON_TRACK:          { card: '',           badge: 'b-track',    label: 'On Track',     icon: '✅' },
-  DONE:              { card: 'u-done',     badge: 'b-done',     label: 'Done',         icon: '☑️' },
-};
+const LABEL_SUGGESTIONS = [
+  'conviction', 'swing', 'early-runner', 'sized', 'cluster', 'avoid-bot', 'watch',
+];
 
-let TASKS = load();
-let nav = 'tasks';        // 'home' | 'tasks'
-let chip = 'today';       // 'today' | sprint key
+let scenario = 'all_winners';
+let tab = 'winners'; // winners | clusters | tokens | detail
+let payload = null;
+let selected = null;
+let detail = null;
+let loading = false;
+let error = null;
+let labels = {};
 
-function load() {
-  const raw = localStorage.getItem(STORE_KEY);
-  if (raw) { try { return JSON.parse(raw); } catch (e) {} }
-  const seed = seedTasks();
-  localStorage.setItem(STORE_KEY, JSON.stringify(seed));
-  return seed;
-}
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(TASKS)); }
-function uid() { return 'id' + Math.random().toString(36).slice(2, 10); }
-
-function seedTasks() {
-  const P = 'Kaizen 2.0 Launch';
-  const t = (o) => Object.assign({ id: uid(), project: P, depends_on: null, actual_minutes: null, template_task: P, priority: 'Must Do', status: 'todo' }, o);
-  return [
-    t({ name: 'Film the going-over template video for the landing page', sprint: 'URGENT', estimated_minutes: 60, status: 'in_progress', final_deadline: '2026-06-29', lead_days: 5 }),
-    t({ name: 'Send the LP loom video to edit', sprint: 'URGENT', estimated_minutes: 90, final_deadline: '2026-06-29', lead_days: 5 }),
-    t({ name: 'Set up the Discord', sprint: 'DEADLINE', estimated_minutes: 90, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Film the VSL', sprint: 'DEADLINE', estimated_minutes: 45, final_deadline: '2026-06-30', lead_days: 4 }),
-    t({ name: 'Record lessons', sprint: 'DEADLINE', estimated_minutes: 180, final_deadline: '2026-06-30', lead_days: 5 }),
-    t({ name: 'Edit the lessons on Loom', sprint: 'ADMIN', estimated_minutes: 180, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Edit the VSL', sprint: 'ADMIN', estimated_minutes: 45, final_deadline: '2026-06-30', lead_days: 5 }),
-    t({ name: 'Daily 1 short creation challenge', sprint: 'ADMIN', estimated_minutes: 60, priority: 'Should Do', final_deadline: '2026-06-29', lead_days: 2 }),
-    t({ name: 'Reply to Roxi and reschedule', sprint: 'CREATIVE', estimated_minutes: 30, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Switch email marketing to a new tool', sprint: 'CREATIVE', estimated_minutes: 30, final_deadline: '2026-07-12', lead_days: 0 }),
-  ];
-}
-
-/* derived */
-function today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
-function autoDate(t) { return L.autoDeadline(new Date(t.final_deadline + 'T00:00:00'), t.lead_days); }
-function urgencyOf(t) { return L.urgency(autoDate(t), today(), t.status); }
-function daysOf(t) { return L.daysLeft(autoDate(t), today()); }
-function openTasks() { return TASKS.filter((t) => t.status !== 'done'); }
-
-/* rendering */
 const root = document.getElementById('app');
+const toastEl = document.getElementById('toast');
 
-function card(t, showSprint) {
-  const u = URG[urgencyOf(t)];
-  const sp = SPRINT_LABEL[t.sprint];
-  const priCls = t.priority === 'Must Do' ? 'pri-must' : 'pri-should';
-  const priIcon = t.priority === 'Must Do' ? '🔥' : '📌';
-  return `<div class="card ${u.card}">
-    <input type="checkbox" class="check" ${t.status === 'done' ? 'checked' : ''} data-toggle="${t.id}" aria-label="Done">
-    <div class="body">
-      <div class="card-title">${esc(t.name)}</div>
-      <div class="meta">
-        <span class="badge ${u.badge}">${u.icon} ${u.label}</span>
-        ${showSprint ? `<span class="tag">${sp.emoji} ${sp.label}</span>` : ''}
-        <span class="tag">⏱ ${t.estimated_minutes}m</span>
-        <span class="sub-badge ${priCls}">${priIcon} ${t.priority}</span>
+function toast(msg) {
+  toastEl.hidden = false;
+  toastEl.textContent = msg;
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => { toastEl.hidden = true; }, 2200);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText || 'request failed');
+  return data;
+}
+
+function usd(n) {
+  const v = Number(n) || 0;
+  const sign = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+  return sign + '$' + a.toFixed(0);
+}
+
+function holdLabel(sec) {
+  if (sec == null || sec === '') return 'hold n/a';
+  const s = Number(sec);
+  if (s < 60) return Math.round(s) + 's hold';
+  if (s < 3600) return Math.round(s / 60) + 'm hold';
+  if (s < 86400) return (s / 3600).toFixed(1) + 'h hold';
+  return (s / 86400).toFixed(1) + 'd hold';
+}
+
+function shortAddr(a) {
+  if (!a) return '';
+  return a.slice(0, 6) + '…' + a.slice(-4);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+async function loadWinners() {
+  loading = true; error = null; selected = null; detail = null; tab = 'winners';
+  render();
+  try {
+    payload = await api('/api/winners?scenario=' + encodeURIComponent(scenario));
+    labels = payload.labels || labels;
+  } catch (e) {
+    error = e.message || String(e);
+    payload = null;
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+async function openTrader(addr) {
+  loading = true; error = null; tab = 'detail'; render();
+  try {
+    detail = await api('/api/trader/' + addr);
+    selected = addr.toLowerCase();
+    if (detail.labels) {
+      labels[selected] = detail.labels;
+    }
+  } catch (e) {
+    error = e.message || String(e);
+    tab = 'winners';
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+async function saveLabels(addr, list) {
+  const data = await api('/api/labels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address: addr, labels: list }),
+  });
+  labels[addr.toLowerCase()] = data.labels || [];
+  toast('Labels saved');
+  render();
+}
+
+async function loadTokens() {
+  loading = true; error = null; tab = 'tokens'; render();
+  try {
+    const data = await api('/api/discover-tokens?window=60');
+    payload = { ...(payload || {}), tokens: data.items || [], tokenWindow: data.windowMinutes };
+  } catch (e) {
+    error = e.message || String(e);
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+function scenarioBlurb() {
+  return (SCENARIOS.find((s) => s.id === scenario) || {}).blurb || '';
+}
+
+function renderWinners() {
+  const items = (payload && payload.items) || [];
+  if (!items.length) {
+    return `<div class="empty">No wallets matched this scenario. Try another preset or refresh.</div>`;
+  }
+  if (scenario === 'fresh') {
+    return `<div class="list">${items.map((it) => {
+      const addr = (it.trader || '').toLowerCase();
+      const mine = (labels[addr] || []).map((t) => `<span class="tag mine">${esc(t)}</span>`).join('');
+      return `<button class="row" data-open="${esc(addr)}">
+        <div>
+          <div class="row-title">${esc(it.short || it.text || 'Fresh position')}</div>
+          <div class="row-sub">${esc(shortAddr(addr))} · $${esc((it.token || {}).symbol || '?')}</div>
+          <div class="tags">${mine}</div>
+        </div>
+        <div class="row-right">
+          <div class="pnl up">${esc(usd(it.heldWorthUsd || it.boughtUsd))}</div>
+          <div class="row-sub">bought ${esc(usd(it.boughtUsd))}</div>
+        </div>
+      </button>`;
+    }).join('')}</div>`;
+  }
+  return `<div class="list">${items.map((it) => {
+    const addr = (it.trader || '').toLowerCase();
+    const pnl = Number(it.realizedPnl) || 0;
+    const mine = (labels[addr] || []).map((t) => `<span class="tag mine">${esc(t)}</span>`).join('');
+    const tok = (it.topToken || (it.lastTrade && it.lastTrade.token) || {}).symbol || '—';
+    return `<button class="row" data-open="${esc(addr)}">
+      <div>
+        <div class="row-title">${esc(it.nickname || shortAddr(addr))}</div>
+        <div class="row-sub">${esc(shortAddr(addr))} · ${esc(tok)} · ${esc(it.tokens || 0)} tokens · ${esc(holdLabel(it.avgHoldSeconds))}</div>
+        <div class="tags">
+          <span class="tag">${esc(Math.round((it.winRate || 0) * 100))}% win</span>
+          <span class="tag">${esc(Number(it.tradesPerDay || 0).toFixed(0))}/day</span>
+          ${it.bot ? '<span class="tag">bot</span>' : ''}
+          ${mine}
+        </div>
+      </div>
+      <div class="row-right">
+        <div class="pnl ${pnl >= 0 ? 'up' : 'down'}">${esc(usd(pnl))}</div>
+        <div class="row-sub">vol ${esc(usd(it.volumeUsd))}</div>
+      </div>
+    </button>`;
+  }).join('')}</div>`;
+}
+
+function renderClusters() {
+  const clusters = (payload && payload.clusters) || [];
+  if (!clusters.length) {
+    return `<div class="empty">No multi-wallet clusters in this result set. Clusters appear when 2+ wallets share the same top token.</div>`;
+  }
+  return clusters.map((c) => {
+    const sym = (c.token || {}).symbol || 'token';
+    const members = (c.wallets || []).map((w) =>
+      `<button class="link" data-open="${esc((w.trader || '').toLowerCase())}" style="border:0;background:0;padding:0;cursor:pointer;font:inherit;color:inherit">${esc(w.nickname || shortAddr(w.trader))} (${esc(usd(w.realizedPnl))})</button>`
+    ).join(' · ');
+    return `<div class="cluster">
+      <strong>${esc(c.size)} wallets</strong> on <strong>$${esc(sym)}</strong>
+      <div class="members">${members}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTokens() {
+  const items = (payload && payload.tokens) || [];
+  if (!items.length) return `<div class="empty">No smart-buyer tokens in window.</div>`;
+  return `<div class="list">${items.map((t) => `
+    <div class="row" style="cursor:default">
+      <div>
+        <div class="row-title">${esc(t.symbol || shortAddr(t.address))}</div>
+        <div class="row-sub">${esc(shortAddr(t.address))} · mcap ${esc(usd(t.marketCapUsd))} · liq ${esc(usd(t.liquidityUsd))}</div>
+        <div class="tags">
+          <span class="tag">${esc(t.smartBuyers || 0)} smart buyers</span>
+          <span class="tag">${esc((t.signals || []).slice(0, 3).join(' · ') || '—')}</span>
+          <span class="tag">score ${esc(t.score)}</span>
+        </div>
+      </div>
+      <div class="row-right">
+        <div class="pnl ${(t.priceChange || 0) >= 0 ? 'up' : 'down'}">${esc(((t.priceChange || 0) * 100).toFixed(0))}%</div>
+        <div class="row-sub"><a class="link" href="https://hoodscan.co/token/${esc(t.address)}" target="_blank" rel="noopener">HoodScan</a></div>
+      </div>
+    </div>`).join('')}</div>`;
+}
+
+function renderDetail() {
+  if (!detail) return `<div class="loading">Loading trader…</div>`;
+  const addr = (selected || detail.trader || '').toLowerCase();
+  const stats = detail.stats || {};
+  const wins = Number(detail.wins ?? 0);
+  const losses = Number(detail.losses ?? 0);
+  const closed = wins + losses;
+  const winRate = closed ? wins / closed : null;
+  const pnl = stats.realizedUsd ?? stats.realizedPnl ?? detail.realizedPnl;
+  const hold = detail.avgHoldSeconds ?? stats.avgHoldSeconds;
+  const nick = (detail.identity && detail.identity.nickname) || stats.nickname || shortAddr(addr);
+  const mine = labels[addr] || [];
+  const suggestions = LABEL_SUGGESTIONS.map((s) =>
+    `<button class="tag mine" type="button" data-suggest="${esc(s)}">${esc(s)}</button>`
+  ).join('');
+
+  const positions = detail.openPositions || detail.positions || [];
+  const recent = detail.recentSwaps || detail.recent || [];
+
+  return `<div class="detail">
+    <button class="btn" type="button" data-back>← Back</button>
+    <h3 style="margin-top:12px">${esc(nick)}</h3>
+    <div class="row-sub">${esc(addr)}</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="k">Realized PnL</div><div class="v pnl ${(Number(pnl)||0)>=0?'up':'down'}">${esc(usd(pnl))}</div></div>
+      <div class="stat"><div class="k">Win rate</div><div class="v">${esc(winRate != null ? Math.round(winRate * 100) + '% (' + wins + 'W/' + losses + 'L)' : '—')}</div></div>
+      <div class="stat"><div class="k">Trades</div><div class="v">${esc(stats.trades ?? '—')}</div></div>
+      <div class="stat"><div class="k">Avg hold</div><div class="v">${esc(holdLabel(hold))}</div></div>
+      <div class="stat"><div class="k">Unrealized</div><div class="v">${esc(usd(detail.unrealizedUsd))}</div></div>
+      <div class="stat"><div class="k">Volume</div><div class="v">${esc(usd(stats.volumeUsd))}</div></div>
+    </div>
+    <p class="hint"><a class="link" href="https://hoodscan.co/trader/${esc(addr)}" target="_blank" rel="noopener">Open on HoodScan</a></p>
+
+    <div class="label-box">
+      <div class="k" style="margin-bottom:6px">Your scenario labels</div>
+      <input id="label-input" type="text" value="${esc(mine.join(', '))}" placeholder="conviction, early-runner, cluster…">
+      <div class="label-actions">
+        <button class="btn primary" type="button" data-save-labels="${esc(addr)}">Save labels</button>
+        ${suggestions}
       </div>
     </div>
-  </div>`;
-}
 
-function renderTasks() {
-  const open = openTasks();
-  const chips = [`<button class="chip ${chip === 'today' ? 'active' : ''}" data-chip="today">⭐ Today <span class="ct">${open.length}</span></button>`]
-    .concat(SPRINTS.map((s) => {
-      const n = open.filter((t) => t.sprint === s.key).length;
-      const info = L.sprintLoad(open)[s.key];
-      return `<button class="chip ${chip === s.key ? 'active' : ''} ${info && info.over ? 'over' : ''}" data-chip="${s.key}">${s.emoji} ${s.label} <span class="ct">${n}</span></button>`;
-    })).join('');
+    ${positions.length ? `<h2 style="margin-top:20px">Open positions</h2><div class="list">${positions.slice(0, 12).map((p) => {
+      const sym = (p.token || {}).symbol || shortAddr((p.token || {}).address);
+      return `<div class="row" style="cursor:default"><div><div class="row-title">$${esc(sym)}</div>
+        <div class="row-sub">${esc(p.buys || 0)} buys · ${esc(p.sells || 0)} sells</div></div>
+        <div class="row-right"><div class="pnl ${(Number(p.realizedUsd)||0)>=0?'up':'down'}">${esc(usd(p.realizedUsd))}</div>
+        <div class="row-sub">u ${esc(usd(p.unrealizedUsd))}</div></div></div>`;
+    }).join('')}</div>` : ''}
 
-  let list, capLine = '';
-  if (chip === 'today') {
-    const items = open.slice().sort((a, b) => daysOf(a) - daysOf(b));
-    list = items.length ? items.map((t) => card(t, true)).join('')
-      : `<div class="empty"><div class="big">🌤️</div>Nothing pressing. Breathe.</div>`;
-  } else {
-    const items = TASKS.filter((t) => t.sprint === chip).sort((a, b) => daysOf(a) - daysOf(b));
-    const info = L.sprintLoad(open)[chip];
-    const sum = info ? info.sum : 0;
-    capLine = `<div class="cap-line">Sprint load <span class="cap-pill ${sum > L.SPRINT_MAX ? 'over' : 'ok'}">${sum}/${L.SPRINT_MAX} min${sum > L.SPRINT_MAX ? ' · over cap ⚠' : ''}</span></div>`;
-    list = items.length ? items.map((t) => card(t, false)).join('')
-      : `<div class="empty"><div class="big">➕</div>No tasks here yet.</div>`;
-  }
-  return `<div class="chips">${chips}</div><div class="wrap">${capLine}<div class="cards">${list}</div></div>`;
-}
-
-function renderHome() {
-  const open = openTasks();
-  const past = open.filter((t) => urgencyOf(t) === 'PAST_DUE').length;
-  const soon = open.filter((t) => ['DUE_TODAY', 'DUE_TOMORROW', 'BETTER_START_SOON'].includes(urgencyOf(t))).length;
-  const focus = open.slice().sort((a, b) => daysOf(a) - daysOf(b)).slice(0, 4);
-  return `<div class="wrap">
-    <div class="callout green"><span>🌱</span><div><h3>Your Kaizen system</h3><p>Work backwards from deadlines so you start early instead of cramming. One small step at a time.</p></div></div>
-    <div class="stats">
-      <div class="stat ${past ? 'warn' : ''}"><div class="n">${past}</div><div class="l">Past due</div></div>
-      <div class="stat"><div class="n">${soon}</div><div class="l">Due soon</div></div>
-      <div class="stat"><div class="n">${open.length}</div><div class="l">Open</div></div>
-    </div>
-    <div class="section-h">Focus now</div>
-    <div class="cards">${focus.length ? focus.map((t) => card(t, true)).join('') : `<div class="empty"><div class="big">✅</div>All clear.</div>`}</div>
+    ${recent.length ? `<h2 style="margin-top:20px">Recent swaps</h2><div class="list">${recent.slice(0, 12).map((r) => {
+      const sym = (r.token || {}).symbol || '—';
+      return `<div class="row" style="cursor:default"><div><div class="row-title">${esc(r.side || '')} $${esc(sym)}</div>
+        <div class="row-sub">${esc(r.time || r.ts || '')}</div></div>
+        <div class="row-right"><div class="pnl">${esc(usd(r.usd || r.valueUsd))}</div></div></div>`;
+    }).join('')}</div>` : ''}
   </div>`;
 }
 
 function render() {
+  const gen = payload && (payload.generatedAt || payload.lookbackHours);
   root.innerHTML = `
-    <div class="topbar"><h1>🗂️ ${nav === 'home' ? 'Home' : 'Tasks'}</h1><div class="sub">${dateLine()}</div></div>
-    ${nav === 'home' ? renderHome() : renderTasks()}
-    <button class="fab" id="fab">+</button>
-    <nav class="nav">
-      <button data-nav="home" class="${nav === 'home' ? 'active' : ''}"><span class="ic">🏠</span>Home</button>
-      <button data-nav="tasks" class="${nav === 'tasks' ? 'active' : ''}"><span class="ic">📋</span>Tasks</button>
-    </nav>`;
-}
-function dateLine() {
-  const d = today();
-  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    <header class="top">
+      <h1 class="brand">Chain<em>Pulse</em></h1>
+      <p class="tagline">Robinhood Chain winner discovery — multiple winning scenarios, not one mold.</p>
+      <div class="meta-line">Chain 4663 · data via HoodScan (free) ${gen ? '· updated ' + esc(String(payload.generatedAt || '')) : ''}</div>
+    </header>
+
+    <div class="scenarios">
+      ${SCENARIOS.map((s) => `<button type="button" class="scenario ${scenario === s.id ? 'active' : ''}" data-scenario="${s.id}">${esc(s.label)}</button>`).join('')}
+    </div>
+
+    <div class="toolbar">
+      <button class="btn primary" type="button" data-refresh ${loading ? 'disabled' : ''}>${loading ? 'Loading…' : 'Refresh'}</button>
+      <button class="btn" type="button" data-tab="winners">Wallets</button>
+      <button class="btn" type="button" data-tab="clusters">Clusters</button>
+      <button class="btn" type="button" data-tab="tokens">Hot tokens</button>
+      <span class="hint">${esc(scenarioBlurb())}</span>
+    </div>
+
+    ${error ? `<div class="error">${esc(error)}</div>` : ''}
+    ${loading && tab !== 'detail' ? `<div class="loading">Pulling Robinhood Chain traders…</div>` : ''}
+
+    <section class="section">
+      ${tab === 'detail' ? renderDetail() : ''}
+      ${tab === 'winners' && !loading ? `<h2>Wallets</h2><p class="blurb">${esc(scenarioBlurb())}</p>${renderWinners()}` : ''}
+      ${tab === 'clusters' && !loading ? `<h2>Clusters</h2><p class="blurb">Wallets in this list that share a top token — possible multi-wallet actors.</p>${renderClusters()}` : ''}
+      ${tab === 'tokens' && !loading ? `<h2>Hot tokens</h2><p class="blurb">Tokens with smart-buyer flow in the last hour.</p>${renderTokens()}` : ''}
+    </section>
+  `;
 }
 
-/* interactions */
-document.addEventListener('click', (e) => {
-  const nb = e.target.closest('[data-nav]'); if (nb) { nav = nb.dataset.nav; render(); return; }
-  const cb = e.target.closest('[data-chip]'); if (cb) { chip = cb.dataset.chip; render(); return; }
-  if (e.target.id === 'fab') { openSheet(); return; }
+root.addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-scenario],[data-refresh],[data-tab],[data-open],[data-back],[data-save-labels],[data-suggest]');
+  if (!t) return;
+
+  if (t.dataset.scenario) {
+    scenario = t.dataset.scenario;
+    await loadWinners();
+    return;
+  }
+  if (t.dataset.refresh !== undefined) {
+    if (tab === 'tokens') await loadTokens();
+    else await loadWinners();
+    return;
+  }
+  if (t.dataset.tab === 'tokens') {
+    await loadTokens();
+    return;
+  }
+  if (t.dataset.tab === 'clusters') {
+    tab = 'clusters';
+    if (!payload) await loadWinners();
+    else render();
+    return;
+  }
+  if (t.dataset.tab === 'winners') {
+    tab = 'winners';
+    if (!payload) await loadWinners();
+    else render();
+    return;
+  }
+  if (t.dataset.open) {
+    await openTrader(t.dataset.open);
+    return;
+  }
+  if (t.dataset.back !== undefined) {
+    tab = 'winners'; detail = null; render();
+    return;
+  }
+  if (t.dataset.saveLabels) {
+    const input = document.getElementById('label-input');
+    const list = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+    try { await saveLabels(t.dataset.saveLabels, list); }
+    catch (err) { toast(err.message || 'Save failed'); }
+    return;
+  }
+  if (t.dataset.suggest) {
+    const input = document.getElementById('label-input');
+    const cur = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!cur.includes(t.dataset.suggest)) cur.push(t.dataset.suggest);
+    input.value = cur.join(', ');
+  }
 });
-document.addEventListener('change', (e) => {
-  const id = e.target.dataset && e.target.dataset.toggle; if (!id) return;
-  const t = TASKS.find((x) => x.id === id); t.status = e.target.checked ? 'done' : 'todo'; save(); render();
-});
 
-/* add sheet */
-function openSheet() {
-  document.getElementById('sheet-bg').classList.add('open');
-  document.getElementById('sheet').classList.add('open');
-  document.getElementById('f-name').value = '';
-  document.getElementById('f-sprint').value = (chip !== 'today' ? chip : 'URGENT');
-  const d = today(); d.setDate(d.getDate() + 7);
-  document.getElementById('f-deadline').value = d.toISOString().slice(0, 10);
-  document.getElementById('f-lead').value = 2;
-  document.getElementById('f-est').value = 30;
-  setTimeout(() => document.getElementById('f-name').focus(), 60);
-}
-function closeSheet() {
-  document.getElementById('sheet').classList.remove('open');
-  document.getElementById('sheet-bg').classList.remove('open');
-}
-function bind() {
-  document.getElementById('f-cancel').onclick = closeSheet;
-  document.getElementById('sheet-bg').onclick = closeSheet;
-  document.getElementById('f-save').onclick = () => {
-    const name = document.getElementById('f-name').value.trim();
-    if (!name) { document.getElementById('f-name').focus(); return; }
-    TASKS.push({
-      id: uid(), name, project: 'Kaizen 2.0 Launch', template_task: 'Kaizen 2.0 Launch', depends_on: null,
-      sprint: document.getElementById('f-sprint').value,
-      final_deadline: document.getElementById('f-deadline').value,
-      lead_days: Number(document.getElementById('f-lead').value) || 0,
-      estimated_minutes: Number(document.getElementById('f-est').value) || 0,
-      actual_minutes: null, priority: document.getElementById('f-pri').value, status: 'todo',
-    });
-    save(); closeSheet();
-    if (nav === 'tasks' && chip !== 'today') chip = document.getElementById('f-sprint').value;
-    render();
-  };
-}
-
-function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-
-bind();
 render();
-
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
-}
+loadWinners();

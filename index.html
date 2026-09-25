@@ -2,48 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
-  <title>leadday</title>
-  <meta name="theme-color" content="#ffffff">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="leadday">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ChainPulse</title>
+  <meta name="description" content="Robinhood Chain winner discovery — wallets, scenarios, clusters.">
+  <meta name="theme-color" content="#071510">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="atmosphere" aria-hidden="true"></div>
   <div id="app"></div>
-
-  <!-- add-task bottom sheet -->
-  <div class="sheet-bg" id="sheet-bg"></div>
-  <div class="sheet" id="sheet">
-    <div class="grab"></div>
-    <h3>New task</h3>
-    <div class="field"><label>Task</label><input id="f-name" type="text" placeholder="What needs doing?" autocomplete="off"></div>
-    <div class="two">
-      <div class="field"><label>Sprint</label>
-        <select id="f-sprint">
-          <option value="URGENT">🔥 Urgent</option>
-          <option value="DEADLINE">⏰ Deadlines</option>
-          <option value="ADMIN">🗂️ Admin</option>
-          <option value="CREATIVE">🎨 Creative</option>
-        </select></div>
-      <div class="field"><label>Priority</label>
-        <select id="f-pri"><option>Must Do</option><option>Should Do</option></select></div>
-    </div>
-    <div class="two">
-      <div class="field"><label>Final deadline</label><input id="f-deadline" type="date"></div>
-      <div class="field"><label>Lead days</label><input id="f-lead" type="number" min="0" value="2" inputmode="numeric"></div>
-    </div>
-    <div class="field"><label>Estimated minutes</label><input id="f-est" type="number" min="0" value="30" inputmode="numeric"></div>
-    <div class="sheet-actions">
-      <button class="btn" id="f-cancel">Cancel</button>
-      <button class="btn primary" id="f-save">Add task</button>
-    </div>
-  </div>
-
-  <script src="leadday.js"></script>
+  <div id="toast" class="toast" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>
