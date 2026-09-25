@@ -1,33 +1,23 @@
 # ChainPulse
 
-Robinhood Chain **winner discovery** — find wallets that are actually making money, across multiple winning scenarios (not one “smart money” mold).
+Robinhood Chain **winner discovery** — open on your phone, no localhost, no login.
+
+**Live:** https://twoski7.github.io/leadday/
 
 ## What it does
 
-- Pulls live trader rankings from [HoodScan](https://hoodscan.co) (free MCP / public JSON — **no API key**)
-- Scenario presets: conviction holders, swing, multi-coin consistent, sized flow, early/selective, fresh positions
-- Drops bots, absurd trade frequency, and measured sub-5‑minute holds where data exists
-- Surfaces **wallet clusters** that share the same top token
-- Lets you **label** wallets with your own scenario tags (saved under `data/labels.json`) for later Jev-style classification
+- Winning wallets from [HoodScan](https://hoodscan.co) public APIs (free, CORS open)
+- Scenario presets (conviction / swing / multi-coin / sized / fresh…)
+- Bot / pace / short-hold filters
+- Clusters + hot tokens
+- Tags saved on your device (`localStorage`)
 
-Chain: Robinhood Chain (`4663`). Not affiliated with Robinhood or HoodScan.
+## Run locally (optional)
 
-## Run
+Just open `index.html` via any static server, or:
 
 ```bash
-python3 server.py
+python3 -m http.server 8080
 ```
 
-Open http://127.0.0.1:8787
-
-Optional: `PORT=9000 python3 server.py`
-
-## Stack
-
-- `server.py` — tiny threaded HTTP server + HoodScan MCP client
-- Frontend — vanilla JS (no build step)
-
-## Notes
-
-- HoodScan numbers are from indexed DEX swaps (not transfers/bridges). Treat as recent, not settlement-critical.
-- This surfaces candidates. It does not place trades or guarantee profit.
+`server.py` is optional (older proxy). The shipped app talks to HoodScan directly from the browser.
