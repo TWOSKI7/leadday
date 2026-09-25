@@ -7,17 +7,17 @@ const VIEWS = [
   {
     id: 'active',
     label: 'Active now',
-    help: 'Won money recently and still trading (last move under 24h).',
+    help: 'Still trading (<24h). One-coin lottery tickets (e.g. only won PONS once) are hidden.',
   },
   {
     id: 'bought',
     label: 'Just bought',
-    help: 'Winners whose latest move was a buy — still putting money in.',
+    help: 'Latest move was a buy — and they have wins across multiple coins, not one lucky hit.',
   },
   {
     id: 'quiet',
     label: 'Quiet / done',
-    help: 'Past winners who have not traded in 24h+. History, not a live signal.',
+    help: 'Idle 24h+. Same anti-lottery filter. History, not a live signal.',
   },
 ];
 
@@ -126,12 +126,28 @@ function winPct(it) {
   return Math.round(r <= 1 ? r * 100 : r);
 }
 
+function isOneHitWonder(it) {
+  const tokens = Number(it.tokens) || 0;
+  const wins = Number(it.wins) || 0;
+  const losses = Number(it.losses) || 0;
+  // Single-token bag = lottery, not a system
+  if (tokens <= 1) return true;
+  // Only one winning coin in the lookback — classic PONS luck
+  if (wins <= 1) return true;
+  // Thin sample dressed up as skill
+  if (tokens < 3 && wins < 3) return true;
+  if (wins + losses > 0 && wins / (wins + losses) === 1 && tokens < 3) return true;
+  return false;
+}
+
 function baseFilter(it) {
   if (it.bot === true) return false;
   if (it.tradesPerDay != null && it.tradesPerDay > 200) return false;
   const vol = Number(it.volumeUsd) || 0;
   const trades = Number(it.trades) || 0;
   if (trades > 50 && vol > 0 && vol / trades < 1) return false;
+  // Default: hide one-coin / one-win luck (PONS bags etc.)
+  if (isOneHitWonder(it)) return false;
   return true;
 }
 
@@ -146,8 +162,10 @@ async function load() {
       includeBots: 'false',
       sort: 'lastTrade',
       dir: 'desc',
-      limit: '80',
+      limit: '100',
       pace: '-150',
+      // Prefer multi-coin traders from the index (still post-filtered for one-win luck)
+      tokens: '3-',
     });
     const res = await fetch(HS + '/swaps-api/discover/traders?' + q);
     if (!res.ok) throw new Error('Could not load traders (' + res.status + ')');
@@ -204,6 +222,9 @@ function renderList() {
     const pnl = Number(it.realizedPnl) || 0;
     const wr = winPct(it);
     const hold = holdLabel(it.avgHoldSeconds);
+    const wins = Number(it.wins) || 0;
+    const losses = Number(it.losses) || 0;
+    const tokN = Number(it.tokens) || 0;
     const mine = (labels[addr] || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
 
     return `<button class="row" type="button" data-open="${esc(addr)}">
@@ -212,8 +233,12 @@ function renderList() {
       <div class="row-body">
         <div>
           <div class="name">${esc(it.nickname || shortAddr(addr))}</div>
-          <div class="meta">${esc(shortAddr(addr))}${wr != null ? ' · ' + wr + '% wins' : ''}${hold ? ' · ' + esc(hold) : ''}</div>
-          ${mine ? `<div class="tags">${mine}</div>` : ''}
+          <div class="meta">${esc(shortAddr(addr))}${wr != null ? ' · ' + wr + '% win rate' : ''}${hold ? ' · ' + esc(hold) : ''}</div>
+          <div class="tags">
+            <span class="tag">${esc(tokN)} coins</span>
+            <span class="tag">${esc(wins)}W / ${esc(losses)}L</span>
+            ${mine}
+          </div>
         </div>
         <div class="side">
           <div class="pnl ${pnl >= 0 ? 'up' : 'down'}">${esc(usd(pnl))}</div>
@@ -295,7 +320,7 @@ function render() {
       ${loading ? `<div class="empty">Loading wallets…</div>` : `<div class="legend">
         <span><i class="dot live"></i> Still trading (&lt;24h)</span>
         <span><i class="dot quiet"></i> Quiet</span>
-        <span class="dim">Green $ = already banked (past)</span>
+        <span class="dim">Green $ = already banked · one-coin luck hidden</span>
       </div>${renderList()}`}
     `}
   `;
