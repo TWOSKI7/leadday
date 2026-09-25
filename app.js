@@ -1,27 +1,31 @@
-/* ChainPulse — Robinhood Chain winners, browser-only (HoodScan public APIs). */
+/* ChainPulse — clarity first: still trading? last move? then track record. */
 const HS = 'https://hoodscan.co';
 const MCP = HS + '/mcp';
+const LABEL_KEY = 'chainpulse.labels.v1';
 
-const SCENARIOS = [
-  { id: 'all_winners', label: 'All winners', blurb: 'Winning wallets · bots off · pace capped' },
-  { id: 'conviction', label: 'Conviction', blurb: 'Multi-token · low pace · longer holds' },
-  { id: 'swing', label: 'Swing', blurb: 'Hours-to-day holds' },
-  { id: 'consistent', label: 'Multi-coin', blurb: '3+ tokens · win-rate floor' },
-  { id: 'sized', label: 'Sized', blurb: 'Higher volume' },
-  { id: 'early', label: 'Selective', blurb: 'Swing · score sort' },
-  { id: 'fresh', label: 'Fresh', blurb: 'New opens still green' },
+/** Three views. Not six “scenarios.” */
+const VIEWS = [
+  {
+    id: 'active',
+    label: 'Active now',
+    help: 'Won money recently and still trading (last move under 24h).',
+  },
+  {
+    id: 'bought',
+    label: 'Just bought',
+    help: 'Winners whose latest move was a buy — still putting money in.',
+  },
+  {
+    id: 'quiet',
+    label: 'Quiet / done',
+    help: 'Past winners who have not traded in 24h+. History, not a live signal.',
+  },
 ];
 
-const LABEL_KEY = 'chainpulse.labels.v1';
-const LABEL_SUGGESTIONS = ['conviction', 'swing', 'early-runner', 'sized', 'cluster', 'watch', 'avoid'];
-
-let scenario = 'all_winners';
-let tab = 'winners';
-let items = [];
-let clusters = [];
-let tokens = [];
-let detail = null;
+let view = 'active';
+let rows = [];
 let selected = null;
+let detail = null;
 let loading = false;
 let error = null;
 let generatedAt = null;
@@ -34,7 +38,7 @@ const toastEl = document.getElementById('toast');
 function loadLabels() {
   try { return JSON.parse(localStorage.getItem(LABEL_KEY) || '{}'); } catch { return {}; }
 }
-function saveLabelStore() {
+function persistLabels() {
   localStorage.setItem(LABEL_KEY, JSON.stringify(labels));
 }
 
@@ -42,90 +46,86 @@ function toast(msg) {
   toastEl.hidden = false;
   toastEl.textContent = msg;
   clearTimeout(toastEl._t);
-  toastEl._t = setTimeout(() => { toastEl.hidden = true; }, 2000);
+  toastEl._t = setTimeout(() => { toastEl.hidden = true; }, 1800);
 }
 
-function usd(n) {
-  const v = Number(n) || 0;
-  const sign = v < 0 ? '-' : '';
-  const a = Math.abs(v);
-  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(2) + 'M';
-  if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(1) + 'K';
-  return sign + '$' + a.toFixed(0);
-}
-function holdLabel(sec) {
-  if (sec == null || sec === '') return null;
-  const s = Number(sec);
-  if (s < 60) return Math.round(s) + 's';
-  if (s < 3600) return Math.round(s / 60) + 'm';
-  if (s < 86400) return (s / 3600).toFixed(1) + 'h';
-  return (s / 86400).toFixed(1) + 'd';
-}
-function shortAddr(a) {
-  if (!a) return '';
-  return a.slice(0, 6) + '…' + a.slice(-4);
-}
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 }
-function ago(iso) {
-  if (!iso) return '';
-  const t = typeof iso === 'number' ? iso * (iso < 1e12 ? 1000 : 1) : Date.parse(iso);
-  if (!t) return '';
-  const s = Math.max(0, (Date.now() - t) / 1000);
+
+function usd(n) {
+  const v = Number(n) || 0;
+  const sign = v < 0 ? '−' : '';
+  const a = Math.abs(v);
+  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+  return sign + '$' + a.toFixed(0);
+}
+
+function shortAddr(a) {
+  if (!a) return '';
+  return a.slice(0, 6) + '…' + a.slice(-4);
+}
+
+function lastTs(it) {
+  const lt = it.lastTrade || {};
+  const t = lt.ts || it.lastTs;
+  if (!t) return null;
+  return t < 1e12 ? t * 1000 : t;
+}
+
+function ageMs(it) {
+  const t = lastTs(it);
+  return t == null ? null : Date.now() - t;
+}
+
+function ago(ms) {
+  if (ms == null) return 'unknown';
+  const s = Math.max(0, ms / 1000);
   if (s < 60) return 'just now';
   if (s < 3600) return Math.round(s / 60) + 'm ago';
   if (s < 86400) return Math.round(s / 3600) + 'h ago';
   return Math.round(s / 86400) + 'd ago';
 }
 
-function scenarioQuery(id) {
-  const base = {
-    result: 'winning',
-    includeBots: 'false',
-    sort: 'realizedPnl',
-    dir: 'desc',
-    limit: '40',
-    pace: '-120',
-  };
-  if (id === 'conviction') return { ...base, pace: '-25', tokens: '2-', minWinRate: '40', sort: 'avgHoldSeconds' };
-  if (id === 'swing') return { ...base, style: 'swing', pace: '-80', tokens: '2-', minWinRate: '40', minClosed: '2' };
-  if (id === 'consistent') return { ...base, tokens: '3-', pace: '-60', minWinRate: '45', minClosed: '3', sort: 'winRate' };
-  if (id === 'sized') return { ...base, minVolume: '25000', pace: '-100', sort: 'volumeUsd' };
-  if (id === 'early') return { ...base, style: 'swing', tokens: '2-', pace: '-50', minClosed: '2', sort: 'score' };
-  return base;
+function activity(it) {
+  const ms = ageMs(it);
+  if (ms == null) return { key: 'unknown', label: 'Activity unknown', live: false };
+  if (ms < 24 * 3600 * 1000) return { key: 'live', label: 'Still trading', live: true };
+  if (ms < 7 * 24 * 3600 * 1000) return { key: 'quiet', label: 'Quiet (1–7d)', live: false };
+  return { key: 'idle', label: 'Idle / likely done', live: false };
 }
 
-function postFilter(list, id) {
-  return (list || []).filter((it) => {
-    if (it.bot === true) return false;
-    if (it.tradesPerDay != null && it.tradesPerDay > 200) return false;
-    const hold = it.avgHoldSeconds;
-    if (hold != null && hold < 300 && ['conviction', 'swing', 'consistent', 'early'].includes(id)) return false;
-    const vol = Number(it.volumeUsd) || 0;
-    const trades = Number(it.trades) || 0;
-    if (trades > 50 && vol > 0 && vol / trades < 1) return false;
-    return true;
-  });
+function lastMove(it) {
+  const lt = it.lastTrade || {};
+  const side = (lt.side || '').toLowerCase();
+  const tok = (lt.token || it.topToken || {}).symbol || '?';
+  const when = ago(ageMs(it));
+  if (side === 'buy') return { side: 'buy', text: `Last bought $${tok} · ${when}`, tok };
+  if (side === 'sell') return { side: 'sell', text: `Last sold $${tok} · ${when}`, tok };
+  return { side: '', text: `Last trade · ${when}`, tok };
 }
 
-function buildClusters(list) {
-  const buckets = {};
-  for (const it of list) {
-    const tok = (it.topToken || {}).address;
-    if (!tok) continue;
-    (buckets[tok.toLowerCase()] ||= []).push(it);
+function holdLabel(sec) {
+  if (sec == null || sec === '') return null;
+  const s = Number(sec);
+  if (s < 60) return Math.round(s) + 's avg hold';
+  if (s < 3600) return Math.round(s / 60) + 'm avg hold';
+  if (s < 86400) return (s / 3600).toFixed(1) + 'h avg hold';
+  return (s / 86400).toFixed(1) + 'd avg hold';
+}
+
+function winPct(it) {
+  if (it.winRate == null) {
+    const w = Number(it.wins) || 0;
+    const l = Number(it.losses) || 0;
+    if (w + l === 0) return null;
+    return Math.round((w / (w + l)) * 100);
   }
-  return Object.values(buckets)
-    .filter((m) => m.length >= 2)
-    .map((m) => {
-      m.sort((a, b) => (b.realizedPnl || 0) - (a.realizedPnl || 0));
-      return { token: m[0].topToken, size: m.length, wallets: m.slice(0, 8) };
-    })
-    .sort((a, b) => b.size - a.size)
-    .slice(0, 20);
+  const r = Number(it.winRate);
+  return Math.round(r <= 1 ? r * 100 : r);
 }
 
 async function mcpInit() {
@@ -138,7 +138,11 @@ async function mcpInit() {
     },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'chainpulse', version: '0.2' } },
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'chainpulse', version: '0.3' },
+      },
     }),
   });
   mcpSid = res.headers.get('mcp-session-id');
@@ -168,16 +172,22 @@ async function mcpCall(name, args) {
   let res = await fetch(MCP, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args || {} } }),
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name, arguments: args || {} },
+    }),
   });
-  if (res.status === 404 || res.status === 400) {
+  if (res.status >= 400) {
     mcpSid = null;
     await mcpInit();
     if (mcpSid) headers['mcp-session-id'] = mcpSid;
     res = await fetch(MCP, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args || {} } }),
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name, arguments: args || {} },
+      }),
     });
   }
   const sid = res.headers.get('mcp-session-id');
@@ -189,7 +199,7 @@ async function mcpCall(name, args) {
     const lines = raw.split('\n').filter((l) => l.startsWith('data:') && l.slice(5).trim().startsWith('{'));
     d = JSON.parse(lines.at(-1).slice(5).trim());
   }
-  if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+  if (d.error) throw new Error(d.error.message || 'MCP error');
   const result = d.result || {};
   if (result.structuredContent) return result.structuredContent;
   for (const c of result.content || []) {
@@ -200,43 +210,52 @@ async function mcpCall(name, args) {
   return result;
 }
 
-async function loadWinners() {
-  loading = true; error = null; detail = null; selected = null; tab = 'winners';
+function baseFilter(it) {
+  if (it.bot === true) return false;
+  if (it.tradesPerDay != null && it.tradesPerDay > 200) return false;
+  const vol = Number(it.volumeUsd) || 0;
+  const trades = Number(it.trades) || 0;
+  if (trades > 50 && vol > 0 && vol / trades < 1) return false;
+  return true;
+}
+
+async function load() {
+  loading = true;
+  error = null;
+  detail = null;
+  selected = null;
   render();
   try {
-    if (scenario === 'fresh') {
-      const data = await mcpCall('list_stories', { kind: 'fresh', limit: 40 });
-      items = data.items || [];
-      clusters = [];
-      generatedAt = data.asOf;
+    const q = new URLSearchParams({
+      result: 'winning',
+      includeBots: 'false',
+      sort: 'lastTrade',
+      dir: 'desc',
+      limit: '80',
+      pace: '-150',
+    });
+    const res = await fetch(HS + '/swaps-api/discover/traders?' + q);
+    if (!res.ok) throw new Error('Could not load traders (' + res.status + ')');
+    const data = await res.json();
+    generatedAt = data.generatedAt;
+    const all = (data.items || []).filter(baseFilter);
+
+    if (view === 'active') {
+      rows = all
+        .filter((it) => activity(it).live)
+        .sort((a, b) => (lastTs(b) || 0) - (lastTs(a) || 0));
+    } else if (view === 'bought') {
+      rows = all
+        .filter((it) => activity(it).live && (it.lastTrade || {}).side === 'buy')
+        .sort((a, b) => (lastTs(b) || 0) - (lastTs(a) || 0));
     } else {
-      const q = new URLSearchParams(scenarioQuery(scenario));
-      const res = await fetch(HS + '/swaps-api/discover/traders?' + q.toString());
-      if (!res.ok) throw new Error('HoodScan traders failed (' + res.status + ')');
-      const data = await res.json();
-      items = postFilter(data.items || [], scenario);
-      clusters = buildClusters(items);
-      generatedAt = data.generatedAt;
+      rows = all
+        .filter((it) => !activity(it).live)
+        .sort((a, b) => (Number(b.realizedPnl) || 0) - (Number(a.realizedPnl) || 0));
     }
   } catch (e) {
     error = e.message || String(e);
-    items = []; clusters = [];
-  } finally {
-    loading = false;
-    render();
-  }
-}
-
-async function loadTokens() {
-  loading = true; error = null; tab = 'tokens'; render();
-  try {
-    const res = await fetch(HS + '/swaps-api/discover/trending?window=60');
-    if (!res.ok) throw new Error('trending failed');
-    const data = await res.json();
-    tokens = (data.items || []).filter((t) => !t.suspicious && (t.smartBuyers || 0) >= 1).slice(0, 50);
-    generatedAt = data.generatedAt;
-  } catch (e) {
-    error = e.message || String(e);
+    rows = [];
   } finally {
     loading = false;
     render();
@@ -244,214 +263,179 @@ async function loadTokens() {
 }
 
 async function openTrader(addr) {
-  loading = true; error = null; tab = 'detail'; selected = addr.toLowerCase(); render();
+  loading = true;
+  error = null;
+  selected = addr.toLowerCase();
+  render();
   try {
-    detail = await mcpCall('get_trader', { address: addr, positions_limit: 30, recent_limit: 30 });
+    detail = await mcpCall('get_trader', {
+      address: addr,
+      positions_limit: 25,
+      recent_limit: 25,
+    });
   } catch (e) {
-    error = e.message || String(e);
-    // still show list row info
-    detail = items.find((i) => (i.trader || '').toLowerCase() === addr.toLowerCase()) || { trader: addr };
+    detail = rows.find((r) => (r.trader || '').toLowerCase() === addr.toLowerCase()) || { trader: addr };
+    error = 'Detail partially loaded: ' + (e.message || e);
   } finally {
     loading = false;
     render();
   }
 }
 
-function blurb() {
-  return (SCENARIOS.find((s) => s.id === scenario) || {}).blurb || '';
+function viewHelp() {
+  return (VIEWS.find((v) => v.id === view) || {}).help || '';
 }
 
-function renderWinners() {
-  if (!items.length) return `<div class="empty">Nothing matched. Try another scenario.</div>`;
-  if (scenario === 'fresh') {
-    return items.map((it) => {
-      const addr = (it.trader || '').toLowerCase();
-      const mine = (labels[addr] || []).map((t) => `<span class="pill mine">${esc(t)}</span>`).join('');
-      return `<button class="card" data-open="${esc(addr)}">
-        <div class="card-main">
-          <div class="name">${esc(it.short || 'Fresh position')}</div>
-          <div class="sub">${esc(shortAddr(addr))} · $${esc((it.token || {}).symbol || '?')}</div>
-          <div class="pills">${mine}</div>
-        </div>
-        <div class="card-side">
-          <div class="money up">${esc(usd(it.heldWorthUsd || it.boughtUsd))}</div>
-          <div class="sub">in ${esc(usd(it.boughtUsd))}</div>
-        </div>
-      </button>`;
-    }).join('');
+function renderList() {
+  if (!rows.length) {
+    return `<div class="empty">No wallets in this view right now. Try another tab or refresh.</div>`;
   }
-  return items.map((it) => {
+  return rows.map((it) => {
     const addr = (it.trader || '').toLowerCase();
+    const act = activity(it);
+    const move = lastMove(it);
     const pnl = Number(it.realizedPnl) || 0;
-    const tok = (it.topToken || (it.lastTrade && it.lastTrade.token) || {}).symbol || '—';
+    const wr = winPct(it);
     const hold = holdLabel(it.avgHoldSeconds);
-    const mine = (labels[addr] || []).map((t) => `<span class="pill mine">${esc(t)}</span>`).join('');
-    const wr = it.winRate != null ? Math.round(it.winRate * (it.winRate <= 1 ? 100 : 1)) : null;
-    return `<button class="card" data-open="${esc(addr)}">
-      <div class="card-main">
-        <div class="name">${esc(it.nickname || shortAddr(addr))}</div>
-        <div class="sub">${esc(shortAddr(addr))} · $${esc(tok)}${hold ? ' · hold ' + esc(hold) : ''}</div>
-        <div class="pills">
-          ${wr != null ? `<span class="pill">${wr}% win</span>` : ''}
-          <span class="pill">${esc(Number(it.tradesPerDay || 0).toFixed(0))}/d</span>
-          <span class="pill">${esc(it.tokens || 0)} tok</span>
-          ${mine}
+    const mine = (labels[addr] || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
+
+    return `<button class="row" type="button" data-open="${esc(addr)}">
+      <div class="status ${esc(act.key)}">${esc(act.label)}</div>
+      <div class="move ${esc(move.side)}">${esc(move.text)}</div>
+      <div class="row-body">
+        <div>
+          <div class="name">${esc(it.nickname || shortAddr(addr))}</div>
+          <div class="meta">${esc(shortAddr(addr))}${wr != null ? ' · ' + wr + '% wins' : ''}${hold ? ' · ' + esc(hold) : ''}</div>
+          ${mine ? `<div class="tags">${mine}</div>` : ''}
         </div>
-      </div>
-      <div class="card-side">
-        <div class="money ${pnl >= 0 ? 'up' : 'down'}">${esc(usd(pnl))}</div>
-        <div class="sub">vol ${esc(usd(it.volumeUsd))}</div>
+        <div class="side">
+          <div class="pnl ${pnl >= 0 ? 'up' : 'down'}">${esc(usd(pnl))}</div>
+          <div class="meta">past realized</div>
+        </div>
       </div>
     </button>`;
   }).join('');
 }
 
-function renderClusters() {
-  if (!clusters.length) return `<div class="empty">No clusters in this set yet.</div>`;
-  return clusters.map((c) => {
-    const sym = (c.token || {}).symbol || 'token';
-    const members = (c.wallets || []).map((w) =>
-      `<button type="button" class="inline" data-open="${esc((w.trader || '').toLowerCase())}">${esc(w.nickname || shortAddr(w.trader))}</button>`
-    ).join('<span class="dot">·</span>');
-    return `<div class="cluster">
-      <div class="name">${esc(c.size)} wallets on $${esc(sym)}</div>
-      <div class="sub members">${members}</div>
-    </div>`;
-  }).join('');
-}
-
-function renderTokens() {
-  if (!tokens.length) return `<div class="empty">No smart-buyer tokens right now.</div>`;
-  return tokens.map((t) => `
-    <a class="card linkcard" href="${esc(HS)}/token/${esc(t.address)}" target="_blank" rel="noopener">
-      <div class="card-main">
-        <div class="name">${esc(t.symbol || shortAddr(t.address))}</div>
-        <div class="sub">mcap ${esc(usd(t.marketCapUsd))} · liq ${esc(usd(t.liquidityUsd))}</div>
-        <div class="pills">
-          <span class="pill">${esc(t.smartBuyers || 0)} smart</span>
-          ${(t.signals || []).slice(0, 2).map((s) => `<span class="pill">${esc(s)}</span>`).join('')}
-        </div>
-      </div>
-      <div class="card-side">
-        <div class="money ${(t.priceChange || 0) >= 0 ? 'up' : 'down'}">${esc(((t.priceChange || 0) * 100).toFixed(0))}%</div>
-      </div>
-    </a>`).join('');
-}
-
 function renderDetail() {
-  if (loading && !detail) return `<div class="empty">Loading…</div>`;
-  if (!detail) return `<div class="empty">No detail.</div>`;
-  const addr = (selected || detail.trader || '').toLowerCase();
-  const stats = detail.stats || {};
-  const wins = Number(detail.wins ?? 0);
-  const losses = Number(detail.losses ?? 0);
-  const closed = wins + losses;
-  const winRate = closed ? wins / closed : (detail.winRate != null ? detail.winRate : null);
-  const wrShow = winRate == null ? null : Math.round(winRate * (winRate <= 1 ? 100 : 1));
-  const pnl = stats.realizedUsd ?? detail.realizedPnl ?? stats.realizedPnl;
-  const hold = holdLabel(detail.avgHoldSeconds ?? stats.avgHoldSeconds);
-  const nick = (detail.identity && detail.identity.nickname) || detail.nickname || shortAddr(addr);
+  const fromList = rows.find((r) => (r.trader || '').toLowerCase() === selected) || {};
+  const addr = selected || '';
+  const act = activity(detail && detail.lastTrade ? detail : fromList);
+  const move = lastMove(detail && detail.lastTrade ? { ...fromList, ...detail, lastTrade: detail.lastTrade || fromList.lastTrade } : fromList);
+  const stats = (detail && detail.stats) || {};
+  const pnl = stats.realizedUsd ?? fromList.realizedPnl;
+  const nick = (detail && detail.identity && detail.identity.nickname) || fromList.nickname || shortAddr(addr);
+  const positions = (detail && detail.openPositions) || [];
+  const recent = (detail && detail.recentSwaps) || [];
+  const openCount = positions.filter((p) => Number(p.heldQty || p.qty || 0) !== 0 || Number(p.unrealizedUsd || 0) !== 0).length;
   const mine = labels[addr] || [];
-  const positions = detail.openPositions || [];
-  const recent = detail.recentSwaps || [];
 
-  return `<div class="detail">
+  return `<section class="detail">
     <button class="btn ghost" type="button" data-back>← Back</button>
+    <div class="status ${esc(act.key)}" style="margin-top:12px">${esc(act.label)}</div>
+    <div class="move ${esc(move.side)}">${esc(move.text)}</div>
     <h2>${esc(nick)}</h2>
-    <div class="sub mono">${esc(addr)}</div>
-    <div class="stats">
-      <div><span>PnL</span><b class="${(Number(pnl)||0)>=0?'up':'down'}">${esc(usd(pnl))}</b></div>
-      <div><span>Win</span><b>${esc(wrShow != null ? wrShow + '%' : '—')}</b></div>
-      <div><span>Hold</span><b>${esc(hold || '—')}</b></div>
-      <div><span>Vol</span><b>${esc(usd(stats.volumeUsd || detail.volumeUsd))}</b></div>
+    <div class="meta mono">${esc(addr)}</div>
+
+    <div class="callout">
+      <strong>How to read this</strong>
+      <p><em>Still trading</em> / last buy·sell = what’s happening <u>now</u>. The dollar figure below is <u>already realized</u> — money they already took. It is not a promise they will keep winning.</p>
     </div>
-    <a class="ext" href="${esc(HS)}/trader/${esc(addr)}" target="_blank" rel="noopener">Open on HoodScan ↗</a>
+
+    <div class="grid">
+      <div><span>Past realized PnL</span><b class="${(Number(pnl)||0)>=0?'up':'down'}">${esc(usd(pnl))}</b></div>
+      <div><span>Open positions</span><b>${esc(openCount || positions.length || '—')}</b></div>
+      <div><span>Wins / losses</span><b>${esc((detail && detail.wins) ?? fromList.wins ?? '—')} / ${esc((detail && detail.losses) ?? fromList.losses ?? '—')}</b></div>
+      <div><span>Avg hold</span><b>${esc(holdLabel((detail && detail.avgHoldSeconds) ?? fromList.avgHoldSeconds) || '—')}</b></div>
+    </div>
+
+    <a class="ext" href="${esc(HS)}/trader/${esc(addr)}" target="_blank" rel="noopener">Full history on HoodScan ↗</a>
+
     <div class="labeler">
-      <label>Your tags</label>
-      <input id="label-input" value="${esc(mine.join(', '))}" placeholder="conviction, watch…">
-      <div class="label-row">
-        <button class="btn primary" type="button" data-save-labels="${esc(addr)}">Save</button>
-        ${LABEL_SUGGESTIONS.map((s) => `<button type="button" class="pill mine" data-suggest="${esc(s)}">${esc(s)}</button>`).join('')}
-      </div>
-      <p class="fine">Saved on this phone only.</p>
+      <label>Your note</label>
+      <input id="label-input" value="${esc(mine.join(', '))}" placeholder="still-hot, skip, cluster…">
+      <button class="btn primary" type="button" data-save="${esc(addr)}">Save on this phone</button>
     </div>
-    ${positions.length ? `<h3>Open</h3>${positions.slice(0, 10).map((p) => {
-      const sym = (p.token || {}).symbol || '?';
-      return `<div class="mini"><div>$${esc(sym)}</div><div class="money ${(Number(p.realizedUsd)||0)>=0?'up':'down'}">${esc(usd(p.realizedUsd))}</div></div>`;
-    }).join('')}` : ''}
-    ${recent.length ? `<h3>Recent</h3>${recent.slice(0, 10).map((r) => {
-      const sym = (r.token || {}).symbol || '?';
-      return `<div class="mini"><div>${esc(r.side || '')} $${esc(sym)}</div><div class="money">${esc(usd(r.usd))}</div></div>`;
-    }).join('')}` : ''}
-  </div>`;
+
+    ${recent.length ? `<h3>Recent swaps (proof of activity)</h3>
+      ${recent.slice(0, 12).map((r) => {
+        const sym = (r.token || {}).symbol || '?';
+        const side = (r.side || '').toLowerCase();
+        return `<div class="mini"><span class="${esc(side)}">${esc(side)} $${esc(sym)}</span><span>${esc(usd(r.usd))}</span></div>`;
+      }).join('')}` : ''}
+
+    ${positions.length ? `<h3>Open / leftover positions</h3>
+      ${positions.slice(0, 12).map((p) => {
+        const sym = (p.token || {}).symbol || '?';
+        return `<div class="mini"><span>$${esc(sym)}</span><span class="${(Number(p.unrealizedUsd)||0)>=0?'up':'down'}">u ${esc(usd(p.unrealizedUsd))} · r ${esc(usd(p.realizedUsd))}</span></div>`;
+      }).join('')}` : `<p class="meta">No open positions returned — may be flat.</p>`}
+  </section>`;
 }
 
 function render() {
+  const showingDetail = !!selected;
   root.innerHTML = `
     <header class="hero">
       <div class="brand">Chain<span>Pulse</span></div>
-      <p>Robinhood Chain winners — open this link on your phone anytime.</p>
-      <div class="fine">${generatedAt ? 'Updated ' + esc(ago(generatedAt) || String(generatedAt)) : 'Live from HoodScan'} · free · no login</div>
+      <p class="lede">One question first: <strong>are they still trading?</strong></p>
+      <p class="sublede">Past profit is labeled as past. Live buys/sells are labeled as live.</p>
     </header>
 
-    <div class="scroller">
-      ${SCENARIOS.map((s) => `<button type="button" class="chip ${scenario === s.id ? 'on' : ''}" data-scenario="${s.id}">${esc(s.label)}</button>`).join('')}
-    </div>
-
-    <div class="bar">
-      <button class="btn primary" type="button" data-refresh ${loading ? 'disabled' : ''}>${loading ? '…' : 'Refresh'}</button>
-      <button class="btn ${tab === 'winners' ? 'on' : ''}" type="button" data-tab="winners">Wallets</button>
-      <button class="btn ${tab === 'clusters' ? 'on' : ''}" type="button" data-tab="clusters">Clusters</button>
-      <button class="btn ${tab === 'tokens' ? 'on' : ''}" type="button" data-tab="tokens">Tokens</button>
-    </div>
-    <p class="fine bar-note">${esc(blurb())}</p>
-
-    ${error ? `<div class="err">${esc(error)}</div>` : ''}
-    ${loading && tab !== 'detail' ? `<div class="empty">Loading…</div>` : ''}
-
-    <main>
-      ${tab === 'detail' ? renderDetail() : ''}
-      ${tab === 'winners' && !loading ? renderWinners() : ''}
-      ${tab === 'clusters' && !loading ? renderClusters() : ''}
-      ${tab === 'tokens' && !loading ? renderTokens() : ''}
-    </main>
+    ${showingDetail ? renderDetail() : `
+      <nav class="tabs" aria-label="Views">
+        ${VIEWS.map((v) => `<button type="button" class="tab ${view === v.id ? 'on' : ''}" data-view="${v.id}">${esc(v.label)}</button>`).join('')}
+      </nav>
+      <p class="help">${esc(viewHelp())}</p>
+      <div class="toolbar">
+        <button class="btn primary" type="button" data-refresh ${loading ? 'disabled' : ''}>${loading ? 'Loading…' : 'Refresh'}</button>
+        <span class="meta">${generatedAt ? 'Feed ' + esc(ago(Date.now() - (typeof generatedAt === 'number' ? (generatedAt < 1e12 ? generatedAt * 1000 : generatedAt) : Date.parse(generatedAt)))) : ''}</span>
+      </div>
+      ${error ? `<div class="err">${esc(error)}</div>` : ''}
+      ${loading ? `<div class="empty">Loading wallets…</div>` : `<div class="legend">
+        <span><i class="dot live"></i> Still trading (&lt;24h)</span>
+        <span><i class="dot quiet"></i> Quiet</span>
+        <span class="dim">Green $ = already banked (past)</span>
+      </div>${renderList()}`}
+    `}
   `;
 }
 
 root.addEventListener('click', async (e) => {
-  const t = e.target.closest('[data-scenario],[data-refresh],[data-tab],[data-open],[data-back],[data-save-labels],[data-suggest]');
+  const t = e.target.closest('[data-view],[data-refresh],[data-open],[data-back],[data-save]');
   if (!t) return;
-  if (t.dataset.scenario) { scenario = t.dataset.scenario; await loadWinners(); return; }
-  if (t.dataset.refresh !== undefined) {
-    if (tab === 'tokens') await loadTokens();
-    else await loadWinners();
+  if (t.dataset.view) {
+    view = t.dataset.view;
+    await load();
     return;
   }
-  if (t.dataset.tab === 'tokens') { await loadTokens(); return; }
-  if (t.dataset.tab === 'clusters') { tab = 'clusters'; if (!items.length) await loadWinners(); else render(); return; }
-  if (t.dataset.tab === 'winners') { tab = 'winners'; if (!items.length) await loadWinners(); else render(); return; }
-  if (t.dataset.open) { await openTrader(t.dataset.open); return; }
-  if (t.dataset.back !== undefined) { tab = 'winners'; detail = null; render(); return; }
-  if (t.dataset.saveLabels) {
-    const input = document.getElementById('label-input');
-    const list = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 12);
-    labels[t.dataset.saveLabels] = list;
-    if (!list.length) delete labels[t.dataset.saveLabels];
-    saveLabelStore();
-    toast('Saved on this phone');
+  if (t.dataset.refresh !== undefined) {
+    await load();
+    return;
+  }
+  if (t.dataset.open) {
+    await openTrader(t.dataset.open);
+    return;
+  }
+  if (t.dataset.back !== undefined) {
+    selected = null;
+    detail = null;
+    error = null;
     render();
     return;
   }
-  if (t.dataset.suggest) {
+  if (t.dataset.save) {
     const input = document.getElementById('label-input');
-    const cur = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean);
-    if (!cur.includes(t.dataset.suggest)) cur.push(t.dataset.suggest);
-    input.value = cur.join(', ');
+    const list = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10);
+    if (list.length) labels[t.dataset.save] = list;
+    else delete labels[t.dataset.save];
+    persistLabels();
+    toast('Saved on this phone');
+    render();
   }
 });
 
 render();
-loadWinners();
+load();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
