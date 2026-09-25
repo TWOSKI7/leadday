@@ -1,193 +1,458 @@
-/* leadday — mobile-first board on the tested leadday logic. Data: on-device only. */
-const L = window.leadday;
-const STORE_KEY = 'leadday.tasks.v1';
+/* ChainPulse — Robinhood Chain winners, browser-only (HoodScan public APIs). */
+const HS = 'https://hoodscan.co';
+const MCP = HS + '/mcp';
 
-const SPRINTS = [
-  { key: 'URGENT',   label: 'Urgent',    emoji: '🔥' },
-  { key: 'DEADLINE', label: 'Deadlines', emoji: '⏰' },
-  { key: 'ADMIN',    label: 'Admin',     emoji: '🗂️' },
-  { key: 'CREATIVE', label: 'Creative',  emoji: '🎨' },
+const SCENARIOS = [
+  { id: 'all_winners', label: 'All winners', blurb: 'Winning wallets · bots off · pace capped' },
+  { id: 'conviction', label: 'Conviction', blurb: 'Multi-token · low pace · longer holds' },
+  { id: 'swing', label: 'Swing', blurb: 'Hours-to-day holds' },
+  { id: 'consistent', label: 'Multi-coin', blurb: '3+ tokens · win-rate floor' },
+  { id: 'sized', label: 'Sized', blurb: 'Higher volume' },
+  { id: 'early', label: 'Selective', blurb: 'Swing · score sort' },
+  { id: 'fresh', label: 'Fresh', blurb: 'New opens still green' },
 ];
-const SPRINT_LABEL = Object.fromEntries(SPRINTS.map((s) => [s.key, s]));
 
-const URG = {
-  PAST_DUE:          { card: 'u-past',     badge: 'b-past',     label: 'Past Due',     icon: '🔴' },
-  DUE_TODAY:         { card: 'u-today',    badge: 'b-today',    label: 'Due Today',    icon: '🟡' },
-  DUE_TOMORROW:      { card: 'u-tomorrow', badge: 'b-tomorrow', label: 'Due Tomorrow', icon: '🟠' },
-  BETTER_START_SOON: { card: 'u-soon',     badge: 'b-soon',     label: 'Start Soon',   icon: '🟠' },
-  ON_TRACK:          { card: '',           badge: 'b-track',    label: 'On Track',     icon: '✅' },
-  DONE:              { card: 'u-done',     badge: 'b-done',     label: 'Done',         icon: '☑️' },
-};
+const LABEL_KEY = 'chainpulse.labels.v1';
+const LABEL_SUGGESTIONS = ['conviction', 'swing', 'early-runner', 'sized', 'cluster', 'watch', 'avoid'];
 
-let TASKS = load();
-let nav = 'tasks';        // 'home' | 'tasks'
-let chip = 'today';       // 'today' | sprint key
+let scenario = 'all_winners';
+let tab = 'winners';
+let items = [];
+let clusters = [];
+let tokens = [];
+let detail = null;
+let selected = null;
+let loading = false;
+let error = null;
+let generatedAt = null;
+let labels = loadLabels();
+let mcpSid = null;
 
-function load() {
-  const raw = localStorage.getItem(STORE_KEY);
-  if (raw) { try { return JSON.parse(raw); } catch (e) {} }
-  const seed = seedTasks();
-  localStorage.setItem(STORE_KEY, JSON.stringify(seed));
-  return seed;
-}
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(TASKS)); }
-function uid() { return 'id' + Math.random().toString(36).slice(2, 10); }
-
-function seedTasks() {
-  const P = 'Kaizen 2.0 Launch';
-  const t = (o) => Object.assign({ id: uid(), project: P, depends_on: null, actual_minutes: null, template_task: P, priority: 'Must Do', status: 'todo' }, o);
-  return [
-    t({ name: 'Film the going-over template video for the landing page', sprint: 'URGENT', estimated_minutes: 60, status: 'in_progress', final_deadline: '2026-06-29', lead_days: 5 }),
-    t({ name: 'Send the LP loom video to edit', sprint: 'URGENT', estimated_minutes: 90, final_deadline: '2026-06-29', lead_days: 5 }),
-    t({ name: 'Set up the Discord', sprint: 'DEADLINE', estimated_minutes: 90, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Film the VSL', sprint: 'DEADLINE', estimated_minutes: 45, final_deadline: '2026-06-30', lead_days: 4 }),
-    t({ name: 'Record lessons', sprint: 'DEADLINE', estimated_minutes: 180, final_deadline: '2026-06-30', lead_days: 5 }),
-    t({ name: 'Edit the lessons on Loom', sprint: 'ADMIN', estimated_minutes: 180, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Edit the VSL', sprint: 'ADMIN', estimated_minutes: 45, final_deadline: '2026-06-30', lead_days: 5 }),
-    t({ name: 'Daily 1 short creation challenge', sprint: 'ADMIN', estimated_minutes: 60, priority: 'Should Do', final_deadline: '2026-06-29', lead_days: 2 }),
-    t({ name: 'Reply to Roxi and reschedule', sprint: 'CREATIVE', estimated_minutes: 30, final_deadline: '2026-06-29', lead_days: 4 }),
-    t({ name: 'Switch email marketing to a new tool', sprint: 'CREATIVE', estimated_minutes: 30, final_deadline: '2026-07-12', lead_days: 0 }),
-  ];
-}
-
-/* derived */
-function today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
-function autoDate(t) { return L.autoDeadline(new Date(t.final_deadline + 'T00:00:00'), t.lead_days); }
-function urgencyOf(t) { return L.urgency(autoDate(t), today(), t.status); }
-function daysOf(t) { return L.daysLeft(autoDate(t), today()); }
-function openTasks() { return TASKS.filter((t) => t.status !== 'done'); }
-
-/* rendering */
 const root = document.getElementById('app');
+const toastEl = document.getElementById('toast');
 
-function card(t, showSprint) {
-  const u = URG[urgencyOf(t)];
-  const sp = SPRINT_LABEL[t.sprint];
-  const priCls = t.priority === 'Must Do' ? 'pri-must' : 'pri-should';
-  const priIcon = t.priority === 'Must Do' ? '🔥' : '📌';
-  return `<div class="card ${u.card}">
-    <input type="checkbox" class="check" ${t.status === 'done' ? 'checked' : ''} data-toggle="${t.id}" aria-label="Done">
-    <div class="body">
-      <div class="card-title">${esc(t.name)}</div>
-      <div class="meta">
-        <span class="badge ${u.badge}">${u.icon} ${u.label}</span>
-        ${showSprint ? `<span class="tag">${sp.emoji} ${sp.label}</span>` : ''}
-        <span class="tag">⏱ ${t.estimated_minutes}m</span>
-        <span class="sub-badge ${priCls}">${priIcon} ${t.priority}</span>
-      </div>
-    </div>
-  </div>`;
+function loadLabels() {
+  try { return JSON.parse(localStorage.getItem(LABEL_KEY) || '{}'); } catch { return {}; }
+}
+function saveLabelStore() {
+  localStorage.setItem(LABEL_KEY, JSON.stringify(labels));
 }
 
-function renderTasks() {
-  const open = openTasks();
-  const chips = [`<button class="chip ${chip === 'today' ? 'active' : ''}" data-chip="today">⭐ Today <span class="ct">${open.length}</span></button>`]
-    .concat(SPRINTS.map((s) => {
-      const n = open.filter((t) => t.sprint === s.key).length;
-      const info = L.sprintLoad(open)[s.key];
-      return `<button class="chip ${chip === s.key ? 'active' : ''} ${info && info.over ? 'over' : ''}" data-chip="${s.key}">${s.emoji} ${s.label} <span class="ct">${n}</span></button>`;
-    })).join('');
+function toast(msg) {
+  toastEl.hidden = false;
+  toastEl.textContent = msg;
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => { toastEl.hidden = true; }, 2000);
+}
 
-  let list, capLine = '';
-  if (chip === 'today') {
-    const items = open.slice().sort((a, b) => daysOf(a) - daysOf(b));
-    list = items.length ? items.map((t) => card(t, true)).join('')
-      : `<div class="empty"><div class="big">🌤️</div>Nothing pressing. Breathe.</div>`;
-  } else {
-    const items = TASKS.filter((t) => t.sprint === chip).sort((a, b) => daysOf(a) - daysOf(b));
-    const info = L.sprintLoad(open)[chip];
-    const sum = info ? info.sum : 0;
-    capLine = `<div class="cap-line">Sprint load <span class="cap-pill ${sum > L.SPRINT_MAX ? 'over' : 'ok'}">${sum}/${L.SPRINT_MAX} min${sum > L.SPRINT_MAX ? ' · over cap ⚠' : ''}</span></div>`;
-    list = items.length ? items.map((t) => card(t, false)).join('')
-      : `<div class="empty"><div class="big">➕</div>No tasks here yet.</div>`;
+function usd(n) {
+  const v = Number(n) || 0;
+  const sign = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+  return sign + '$' + a.toFixed(0);
+}
+function holdLabel(sec) {
+  if (sec == null || sec === '') return null;
+  const s = Number(sec);
+  if (s < 60) return Math.round(s) + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  if (s < 86400) return (s / 3600).toFixed(1) + 'h';
+  return (s / 86400).toFixed(1) + 'd';
+}
+function shortAddr(a) {
+  if (!a) return '';
+  return a.slice(0, 6) + '…' + a.slice(-4);
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+function ago(iso) {
+  if (!iso) return '';
+  const t = typeof iso === 'number' ? iso * (iso < 1e12 ? 1000 : 1) : Date.parse(iso);
+  if (!t) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+
+function scenarioQuery(id) {
+  const base = {
+    result: 'winning',
+    includeBots: 'false',
+    sort: 'realizedPnl',
+    dir: 'desc',
+    limit: '40',
+    pace: '-120',
+  };
+  if (id === 'conviction') return { ...base, pace: '-25', tokens: '2-', minWinRate: '40', sort: 'avgHoldSeconds' };
+  if (id === 'swing') return { ...base, style: 'swing', pace: '-80', tokens: '2-', minWinRate: '40', minClosed: '2' };
+  if (id === 'consistent') return { ...base, tokens: '3-', pace: '-60', minWinRate: '45', minClosed: '3', sort: 'winRate' };
+  if (id === 'sized') return { ...base, minVolume: '25000', pace: '-100', sort: 'volumeUsd' };
+  if (id === 'early') return { ...base, style: 'swing', tokens: '2-', pace: '-50', minClosed: '2', sort: 'score' };
+  return base;
+}
+
+function postFilter(list, id) {
+  return (list || []).filter((it) => {
+    if (it.bot === true) return false;
+    if (it.tradesPerDay != null && it.tradesPerDay > 200) return false;
+    const hold = it.avgHoldSeconds;
+    if (hold != null && hold < 300 && ['conviction', 'swing', 'consistent', 'early'].includes(id)) return false;
+    const vol = Number(it.volumeUsd) || 0;
+    const trades = Number(it.trades) || 0;
+    if (trades > 50 && vol > 0 && vol / trades < 1) return false;
+    return true;
+  });
+}
+
+function buildClusters(list) {
+  const buckets = {};
+  for (const it of list) {
+    const tok = (it.topToken || {}).address;
+    if (!tok) continue;
+    (buckets[tok.toLowerCase()] ||= []).push(it);
   }
-  return `<div class="chips">${chips}</div><div class="wrap">${capLine}<div class="cards">${list}</div></div>`;
+  return Object.values(buckets)
+    .filter((m) => m.length >= 2)
+    .map((m) => {
+      m.sort((a, b) => (b.realizedPnl || 0) - (a.realizedPnl || 0));
+      return { token: m[0].topToken, size: m.length, wallets: m.slice(0, 8) };
+    })
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 20);
 }
 
-function renderHome() {
-  const open = openTasks();
-  const past = open.filter((t) => urgencyOf(t) === 'PAST_DUE').length;
-  const soon = open.filter((t) => ['DUE_TODAY', 'DUE_TOMORROW', 'BETTER_START_SOON'].includes(urgencyOf(t))).length;
-  const focus = open.slice().sort((a, b) => daysOf(a) - daysOf(b)).slice(0, 4);
-  return `<div class="wrap">
-    <div class="callout green"><span>🌱</span><div><h3>Your Kaizen system</h3><p>Work backwards from deadlines so you start early instead of cramming. One small step at a time.</p></div></div>
+async function mcpInit() {
+  const res = await fetch(MCP, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'MCP-Protocol-Version': '2025-11-25',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'chainpulse', version: '0.2' } },
+    }),
+  });
+  mcpSid = res.headers.get('mcp-session-id');
+  await res.json().catch(() => ({}));
+  if (mcpSid) {
+    await fetch(MCP, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'MCP-Protocol-Version': '2025-11-25',
+        'mcp-session-id': mcpSid,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    }).catch(() => {});
+  }
+}
+
+async function mcpCall(name, args) {
+  if (!mcpSid) await mcpInit();
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    'MCP-Protocol-Version': '2025-11-25',
+  };
+  if (mcpSid) headers['mcp-session-id'] = mcpSid;
+  let res = await fetch(MCP, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args || {} } }),
+  });
+  if (res.status === 404 || res.status === 400) {
+    mcpSid = null;
+    await mcpInit();
+    if (mcpSid) headers['mcp-session-id'] = mcpSid;
+    res = await fetch(MCP, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args || {} } }),
+    });
+  }
+  const sid = res.headers.get('mcp-session-id');
+  if (sid) mcpSid = sid;
+  const raw = await res.text();
+  let d;
+  if (raw.trim().startsWith('{')) d = JSON.parse(raw);
+  else {
+    const lines = raw.split('\n').filter((l) => l.startsWith('data:') && l.slice(5).trim().startsWith('{'));
+    d = JSON.parse(lines.at(-1).slice(5).trim());
+  }
+  if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+  const result = d.result || {};
+  if (result.structuredContent) return result.structuredContent;
+  for (const c of result.content || []) {
+    if (c.type === 'text') {
+      try { return JSON.parse(c.text); } catch { return { text: c.text }; }
+    }
+  }
+  return result;
+}
+
+async function loadWinners() {
+  loading = true; error = null; detail = null; selected = null; tab = 'winners';
+  render();
+  try {
+    if (scenario === 'fresh') {
+      const data = await mcpCall('list_stories', { kind: 'fresh', limit: 40 });
+      items = data.items || [];
+      clusters = [];
+      generatedAt = data.asOf;
+    } else {
+      const q = new URLSearchParams(scenarioQuery(scenario));
+      const res = await fetch(HS + '/swaps-api/discover/traders?' + q.toString());
+      if (!res.ok) throw new Error('HoodScan traders failed (' + res.status + ')');
+      const data = await res.json();
+      items = postFilter(data.items || [], scenario);
+      clusters = buildClusters(items);
+      generatedAt = data.generatedAt;
+    }
+  } catch (e) {
+    error = e.message || String(e);
+    items = []; clusters = [];
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+async function loadTokens() {
+  loading = true; error = null; tab = 'tokens'; render();
+  try {
+    const res = await fetch(HS + '/swaps-api/discover/trending?window=60');
+    if (!res.ok) throw new Error('trending failed');
+    const data = await res.json();
+    tokens = (data.items || []).filter((t) => !t.suspicious && (t.smartBuyers || 0) >= 1).slice(0, 50);
+    generatedAt = data.generatedAt;
+  } catch (e) {
+    error = e.message || String(e);
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+async function openTrader(addr) {
+  loading = true; error = null; tab = 'detail'; selected = addr.toLowerCase(); render();
+  try {
+    detail = await mcpCall('get_trader', { address: addr, positions_limit: 30, recent_limit: 30 });
+  } catch (e) {
+    error = e.message || String(e);
+    // still show list row info
+    detail = items.find((i) => (i.trader || '').toLowerCase() === addr.toLowerCase()) || { trader: addr };
+  } finally {
+    loading = false;
+    render();
+  }
+}
+
+function blurb() {
+  return (SCENARIOS.find((s) => s.id === scenario) || {}).blurb || '';
+}
+
+function renderWinners() {
+  if (!items.length) return `<div class="empty">Nothing matched. Try another scenario.</div>`;
+  if (scenario === 'fresh') {
+    return items.map((it) => {
+      const addr = (it.trader || '').toLowerCase();
+      const mine = (labels[addr] || []).map((t) => `<span class="pill mine">${esc(t)}</span>`).join('');
+      return `<button class="card" data-open="${esc(addr)}">
+        <div class="card-main">
+          <div class="name">${esc(it.short || 'Fresh position')}</div>
+          <div class="sub">${esc(shortAddr(addr))} · $${esc((it.token || {}).symbol || '?')}</div>
+          <div class="pills">${mine}</div>
+        </div>
+        <div class="card-side">
+          <div class="money up">${esc(usd(it.heldWorthUsd || it.boughtUsd))}</div>
+          <div class="sub">in ${esc(usd(it.boughtUsd))}</div>
+        </div>
+      </button>`;
+    }).join('');
+  }
+  return items.map((it) => {
+    const addr = (it.trader || '').toLowerCase();
+    const pnl = Number(it.realizedPnl) || 0;
+    const tok = (it.topToken || (it.lastTrade && it.lastTrade.token) || {}).symbol || '—';
+    const hold = holdLabel(it.avgHoldSeconds);
+    const mine = (labels[addr] || []).map((t) => `<span class="pill mine">${esc(t)}</span>`).join('');
+    const wr = it.winRate != null ? Math.round(it.winRate * (it.winRate <= 1 ? 100 : 1)) : null;
+    return `<button class="card" data-open="${esc(addr)}">
+      <div class="card-main">
+        <div class="name">${esc(it.nickname || shortAddr(addr))}</div>
+        <div class="sub">${esc(shortAddr(addr))} · $${esc(tok)}${hold ? ' · hold ' + esc(hold) : ''}</div>
+        <div class="pills">
+          ${wr != null ? `<span class="pill">${wr}% win</span>` : ''}
+          <span class="pill">${esc(Number(it.tradesPerDay || 0).toFixed(0))}/d</span>
+          <span class="pill">${esc(it.tokens || 0)} tok</span>
+          ${mine}
+        </div>
+      </div>
+      <div class="card-side">
+        <div class="money ${pnl >= 0 ? 'up' : 'down'}">${esc(usd(pnl))}</div>
+        <div class="sub">vol ${esc(usd(it.volumeUsd))}</div>
+      </div>
+    </button>`;
+  }).join('');
+}
+
+function renderClusters() {
+  if (!clusters.length) return `<div class="empty">No clusters in this set yet.</div>`;
+  return clusters.map((c) => {
+    const sym = (c.token || {}).symbol || 'token';
+    const members = (c.wallets || []).map((w) =>
+      `<button type="button" class="inline" data-open="${esc((w.trader || '').toLowerCase())}">${esc(w.nickname || shortAddr(w.trader))}</button>`
+    ).join('<span class="dot">·</span>');
+    return `<div class="cluster">
+      <div class="name">${esc(c.size)} wallets on $${esc(sym)}</div>
+      <div class="sub members">${members}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTokens() {
+  if (!tokens.length) return `<div class="empty">No smart-buyer tokens right now.</div>`;
+  return tokens.map((t) => `
+    <a class="card linkcard" href="${esc(HS)}/token/${esc(t.address)}" target="_blank" rel="noopener">
+      <div class="card-main">
+        <div class="name">${esc(t.symbol || shortAddr(t.address))}</div>
+        <div class="sub">mcap ${esc(usd(t.marketCapUsd))} · liq ${esc(usd(t.liquidityUsd))}</div>
+        <div class="pills">
+          <span class="pill">${esc(t.smartBuyers || 0)} smart</span>
+          ${(t.signals || []).slice(0, 2).map((s) => `<span class="pill">${esc(s)}</span>`).join('')}
+        </div>
+      </div>
+      <div class="card-side">
+        <div class="money ${(t.priceChange || 0) >= 0 ? 'up' : 'down'}">${esc(((t.priceChange || 0) * 100).toFixed(0))}%</div>
+      </div>
+    </a>`).join('');
+}
+
+function renderDetail() {
+  if (loading && !detail) return `<div class="empty">Loading…</div>`;
+  if (!detail) return `<div class="empty">No detail.</div>`;
+  const addr = (selected || detail.trader || '').toLowerCase();
+  const stats = detail.stats || {};
+  const wins = Number(detail.wins ?? 0);
+  const losses = Number(detail.losses ?? 0);
+  const closed = wins + losses;
+  const winRate = closed ? wins / closed : (detail.winRate != null ? detail.winRate : null);
+  const wrShow = winRate == null ? null : Math.round(winRate * (winRate <= 1 ? 100 : 1));
+  const pnl = stats.realizedUsd ?? detail.realizedPnl ?? stats.realizedPnl;
+  const hold = holdLabel(detail.avgHoldSeconds ?? stats.avgHoldSeconds);
+  const nick = (detail.identity && detail.identity.nickname) || detail.nickname || shortAddr(addr);
+  const mine = labels[addr] || [];
+  const positions = detail.openPositions || [];
+  const recent = detail.recentSwaps || [];
+
+  return `<div class="detail">
+    <button class="btn ghost" type="button" data-back>← Back</button>
+    <h2>${esc(nick)}</h2>
+    <div class="sub mono">${esc(addr)}</div>
     <div class="stats">
-      <div class="stat ${past ? 'warn' : ''}"><div class="n">${past}</div><div class="l">Past due</div></div>
-      <div class="stat"><div class="n">${soon}</div><div class="l">Due soon</div></div>
-      <div class="stat"><div class="n">${open.length}</div><div class="l">Open</div></div>
+      <div><span>PnL</span><b class="${(Number(pnl)||0)>=0?'up':'down'}">${esc(usd(pnl))}</b></div>
+      <div><span>Win</span><b>${esc(wrShow != null ? wrShow + '%' : '—')}</b></div>
+      <div><span>Hold</span><b>${esc(hold || '—')}</b></div>
+      <div><span>Vol</span><b>${esc(usd(stats.volumeUsd || detail.volumeUsd))}</b></div>
     </div>
-    <div class="section-h">Focus now</div>
-    <div class="cards">${focus.length ? focus.map((t) => card(t, true)).join('') : `<div class="empty"><div class="big">✅</div>All clear.</div>`}</div>
+    <a class="ext" href="${esc(HS)}/trader/${esc(addr)}" target="_blank" rel="noopener">Open on HoodScan ↗</a>
+    <div class="labeler">
+      <label>Your tags</label>
+      <input id="label-input" value="${esc(mine.join(', '))}" placeholder="conviction, watch…">
+      <div class="label-row">
+        <button class="btn primary" type="button" data-save-labels="${esc(addr)}">Save</button>
+        ${LABEL_SUGGESTIONS.map((s) => `<button type="button" class="pill mine" data-suggest="${esc(s)}">${esc(s)}</button>`).join('')}
+      </div>
+      <p class="fine">Saved on this phone only.</p>
+    </div>
+    ${positions.length ? `<h3>Open</h3>${positions.slice(0, 10).map((p) => {
+      const sym = (p.token || {}).symbol || '?';
+      return `<div class="mini"><div>$${esc(sym)}</div><div class="money ${(Number(p.realizedUsd)||0)>=0?'up':'down'}">${esc(usd(p.realizedUsd))}</div></div>`;
+    }).join('')}` : ''}
+    ${recent.length ? `<h3>Recent</h3>${recent.slice(0, 10).map((r) => {
+      const sym = (r.token || {}).symbol || '?';
+      return `<div class="mini"><div>${esc(r.side || '')} $${esc(sym)}</div><div class="money">${esc(usd(r.usd))}</div></div>`;
+    }).join('')}` : ''}
   </div>`;
 }
 
 function render() {
   root.innerHTML = `
-    <div class="topbar"><h1>🗂️ ${nav === 'home' ? 'Home' : 'Tasks'}</h1><div class="sub">${dateLine()}</div></div>
-    ${nav === 'home' ? renderHome() : renderTasks()}
-    <button class="fab" id="fab">+</button>
-    <nav class="nav">
-      <button data-nav="home" class="${nav === 'home' ? 'active' : ''}"><span class="ic">🏠</span>Home</button>
-      <button data-nav="tasks" class="${nav === 'tasks' ? 'active' : ''}"><span class="ic">📋</span>Tasks</button>
-    </nav>`;
-}
-function dateLine() {
-  const d = today();
-  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    <header class="hero">
+      <div class="brand">Chain<span>Pulse</span></div>
+      <p>Robinhood Chain winners — open this link on your phone anytime.</p>
+      <div class="fine">${generatedAt ? 'Updated ' + esc(ago(generatedAt) || String(generatedAt)) : 'Live from HoodScan'} · free · no login</div>
+    </header>
+
+    <div class="scroller">
+      ${SCENARIOS.map((s) => `<button type="button" class="chip ${scenario === s.id ? 'on' : ''}" data-scenario="${s.id}">${esc(s.label)}</button>`).join('')}
+    </div>
+
+    <div class="bar">
+      <button class="btn primary" type="button" data-refresh ${loading ? 'disabled' : ''}>${loading ? '…' : 'Refresh'}</button>
+      <button class="btn ${tab === 'winners' ? 'on' : ''}" type="button" data-tab="winners">Wallets</button>
+      <button class="btn ${tab === 'clusters' ? 'on' : ''}" type="button" data-tab="clusters">Clusters</button>
+      <button class="btn ${tab === 'tokens' ? 'on' : ''}" type="button" data-tab="tokens">Tokens</button>
+    </div>
+    <p class="fine bar-note">${esc(blurb())}</p>
+
+    ${error ? `<div class="err">${esc(error)}</div>` : ''}
+    ${loading && tab !== 'detail' ? `<div class="empty">Loading…</div>` : ''}
+
+    <main>
+      ${tab === 'detail' ? renderDetail() : ''}
+      ${tab === 'winners' && !loading ? renderWinners() : ''}
+      ${tab === 'clusters' && !loading ? renderClusters() : ''}
+      ${tab === 'tokens' && !loading ? renderTokens() : ''}
+    </main>
+  `;
 }
 
-/* interactions */
-document.addEventListener('click', (e) => {
-  const nb = e.target.closest('[data-nav]'); if (nb) { nav = nb.dataset.nav; render(); return; }
-  const cb = e.target.closest('[data-chip]'); if (cb) { chip = cb.dataset.chip; render(); return; }
-  if (e.target.id === 'fab') { openSheet(); return; }
-});
-document.addEventListener('change', (e) => {
-  const id = e.target.dataset && e.target.dataset.toggle; if (!id) return;
-  const t = TASKS.find((x) => x.id === id); t.status = e.target.checked ? 'done' : 'todo'; save(); render();
-});
-
-/* add sheet */
-function openSheet() {
-  document.getElementById('sheet-bg').classList.add('open');
-  document.getElementById('sheet').classList.add('open');
-  document.getElementById('f-name').value = '';
-  document.getElementById('f-sprint').value = (chip !== 'today' ? chip : 'URGENT');
-  const d = today(); d.setDate(d.getDate() + 7);
-  document.getElementById('f-deadline').value = d.toISOString().slice(0, 10);
-  document.getElementById('f-lead').value = 2;
-  document.getElementById('f-est').value = 30;
-  setTimeout(() => document.getElementById('f-name').focus(), 60);
-}
-function closeSheet() {
-  document.getElementById('sheet').classList.remove('open');
-  document.getElementById('sheet-bg').classList.remove('open');
-}
-function bind() {
-  document.getElementById('f-cancel').onclick = closeSheet;
-  document.getElementById('sheet-bg').onclick = closeSheet;
-  document.getElementById('f-save').onclick = () => {
-    const name = document.getElementById('f-name').value.trim();
-    if (!name) { document.getElementById('f-name').focus(); return; }
-    TASKS.push({
-      id: uid(), name, project: 'Kaizen 2.0 Launch', template_task: 'Kaizen 2.0 Launch', depends_on: null,
-      sprint: document.getElementById('f-sprint').value,
-      final_deadline: document.getElementById('f-deadline').value,
-      lead_days: Number(document.getElementById('f-lead').value) || 0,
-      estimated_minutes: Number(document.getElementById('f-est').value) || 0,
-      actual_minutes: null, priority: document.getElementById('f-pri').value, status: 'todo',
-    });
-    save(); closeSheet();
-    if (nav === 'tasks' && chip !== 'today') chip = document.getElementById('f-sprint').value;
+root.addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-scenario],[data-refresh],[data-tab],[data-open],[data-back],[data-save-labels],[data-suggest]');
+  if (!t) return;
+  if (t.dataset.scenario) { scenario = t.dataset.scenario; await loadWinners(); return; }
+  if (t.dataset.refresh !== undefined) {
+    if (tab === 'tokens') await loadTokens();
+    else await loadWinners();
+    return;
+  }
+  if (t.dataset.tab === 'tokens') { await loadTokens(); return; }
+  if (t.dataset.tab === 'clusters') { tab = 'clusters'; if (!items.length) await loadWinners(); else render(); return; }
+  if (t.dataset.tab === 'winners') { tab = 'winners'; if (!items.length) await loadWinners(); else render(); return; }
+  if (t.dataset.open) { await openTrader(t.dataset.open); return; }
+  if (t.dataset.back !== undefined) { tab = 'winners'; detail = null; render(); return; }
+  if (t.dataset.saveLabels) {
+    const input = document.getElementById('label-input');
+    const list = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 12);
+    labels[t.dataset.saveLabels] = list;
+    if (!list.length) delete labels[t.dataset.saveLabels];
+    saveLabelStore();
+    toast('Saved on this phone');
     render();
-  };
-}
+    return;
+  }
+  if (t.dataset.suggest) {
+    const input = document.getElementById('label-input');
+    const cur = (input.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!cur.includes(t.dataset.suggest)) cur.push(t.dataset.suggest);
+    input.value = cur.join(', ');
+  }
+});
 
-function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-
-bind();
 render();
+loadWinners();
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
