@@ -1,9 +1,8 @@
-/* ChainPulse — clarity first: still trading? last move? then track record. */
+/* ChainPulse — clarity first: still trading? last move? then track record.
+   Wallet open is instant (list data). HoodScan deep pages for full history. */
 const HS = 'https://hoodscan.co';
-const MCP = HS + '/mcp';
 const LABEL_KEY = 'chainpulse.labels.v1';
 
-/** Three views. Not six “scenarios.” */
 const VIEWS = [
   {
     id: 'active',
@@ -25,12 +24,10 @@ const VIEWS = [
 let view = 'active';
 let rows = [];
 let selected = null;
-let detail = null;
 let loading = false;
 let error = null;
 let generatedAt = null;
 let labels = loadLabels();
-let mcpSid = null;
 
 const root = document.getElementById('app');
 const toastEl = document.getElementById('toast');
@@ -103,8 +100,9 @@ function lastMove(it) {
   const side = (lt.side || '').toLowerCase();
   const tok = (lt.token || it.topToken || {}).symbol || '?';
   const when = ago(ageMs(it));
-  if (side === 'buy') return { side: 'buy', text: `Last bought $${tok} · ${when}`, tok };
-  if (side === 'sell') return { side: 'sell', text: `Last sold $${tok} · ${when}`, tok };
+  const size = lt.usd != null ? ' · ' + usd(lt.usd) : '';
+  if (side === 'buy') return { side: 'buy', text: `Last bought $${tok}${size} · ${when}`, tok };
+  if (side === 'sell') return { side: 'sell', text: `Last sold $${tok}${size} · ${when}`, tok };
   return { side: '', text: `Last trade · ${when}`, tok };
 }
 
@@ -128,88 +126,6 @@ function winPct(it) {
   return Math.round(r <= 1 ? r * 100 : r);
 }
 
-async function mcpInit() {
-  const res = await fetch(MCP, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-11-25',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: { name: 'chainpulse', version: '0.3' },
-      },
-    }),
-  });
-  mcpSid = res.headers.get('mcp-session-id');
-  await res.json().catch(() => ({}));
-  if (mcpSid) {
-    await fetch(MCP, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        'MCP-Protocol-Version': '2025-11-25',
-        'mcp-session-id': mcpSid,
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-    }).catch(() => {});
-  }
-}
-
-async function mcpCall(name, args) {
-  if (!mcpSid) await mcpInit();
-  const headers = {
-    'content-type': 'application/json',
-    accept: 'application/json, text/event-stream',
-    'MCP-Protocol-Version': '2025-11-25',
-  };
-  if (mcpSid) headers['mcp-session-id'] = mcpSid;
-  let res = await fetch(MCP, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 2, method: 'tools/call',
-      params: { name, arguments: args || {} },
-    }),
-  });
-  if (res.status >= 400) {
-    mcpSid = null;
-    await mcpInit();
-    if (mcpSid) headers['mcp-session-id'] = mcpSid;
-    res = await fetch(MCP, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 2, method: 'tools/call',
-        params: { name, arguments: args || {} },
-      }),
-    });
-  }
-  const sid = res.headers.get('mcp-session-id');
-  if (sid) mcpSid = sid;
-  const raw = await res.text();
-  let d;
-  if (raw.trim().startsWith('{')) d = JSON.parse(raw);
-  else {
-    const lines = raw.split('\n').filter((l) => l.startsWith('data:') && l.slice(5).trim().startsWith('{'));
-    d = JSON.parse(lines.at(-1).slice(5).trim());
-  }
-  if (d.error) throw new Error(d.error.message || 'MCP error');
-  const result = d.result || {};
-  if (result.structuredContent) return result.structuredContent;
-  for (const c of result.content || []) {
-    if (c.type === 'text') {
-      try { return JSON.parse(c.text); } catch { return { text: c.text }; }
-    }
-  }
-  return result;
-}
-
 function baseFilter(it) {
   if (it.bot === true) return false;
   if (it.tradesPerDay != null && it.tradesPerDay > 200) return false;
@@ -222,7 +138,6 @@ function baseFilter(it) {
 async function load() {
   loading = true;
   error = null;
-  detail = null;
   selected = null;
   render();
   try {
@@ -262,28 +177,20 @@ async function load() {
   }
 }
 
-async function openTrader(addr) {
-  loading = true;
-  error = null;
+/** Instant — no MCP round-trip (that was ~20s). */
+function openTrader(addr) {
   selected = addr.toLowerCase();
+  error = null;
   render();
-  try {
-    detail = await mcpCall('get_trader', {
-      address: addr,
-      positions_limit: 25,
-      recent_limit: 25,
-    });
-  } catch (e) {
-    detail = rows.find((r) => (r.trader || '').toLowerCase() === addr.toLowerCase()) || { trader: addr };
-    error = 'Detail partially loaded: ' + (e.message || e);
-  } finally {
-    loading = false;
-    render();
-  }
+  window.scrollTo(0, 0);
 }
 
 function viewHelp() {
   return (VIEWS.find((v) => v.id === view) || {}).help || '';
+}
+
+function selectedRow() {
+  return rows.find((r) => (r.trader || '').toLowerCase() === selected) || { trader: selected };
 }
 
 function renderList() {
@@ -318,17 +225,17 @@ function renderList() {
 }
 
 function renderDetail() {
-  const fromList = rows.find((r) => (r.trader || '').toLowerCase() === selected) || {};
+  const it = selectedRow();
   const addr = selected || '';
-  const act = activity(detail && detail.lastTrade ? detail : fromList);
-  const move = lastMove(detail && detail.lastTrade ? { ...fromList, ...detail, lastTrade: detail.lastTrade || fromList.lastTrade } : fromList);
-  const stats = (detail && detail.stats) || {};
-  const pnl = stats.realizedUsd ?? fromList.realizedPnl;
-  const nick = (detail && detail.identity && detail.identity.nickname) || fromList.nickname || shortAddr(addr);
-  const positions = (detail && detail.openPositions) || [];
-  const recent = (detail && detail.recentSwaps) || [];
-  const openCount = positions.filter((p) => Number(p.heldQty || p.qty || 0) !== 0 || Number(p.unrealizedUsd || 0) !== 0).length;
+  const act = activity(it);
+  const move = lastMove(it);
+  const pnl = Number(it.realizedPnl) || 0;
+  const wr = winPct(it);
+  const hold = holdLabel(it.avgHoldSeconds);
+  const nick = it.nickname || shortAddr(addr);
   const mine = labels[addr] || [];
+  const top = it.topToken || (it.lastTrade && it.lastTrade.token) || {};
+  const venues = (it.venues || []).join(', ') || '—';
 
   return `<section class="detail">
     <button class="btn ghost" type="button" data-back>← Back</button>
@@ -339,36 +246,30 @@ function renderDetail() {
 
     <div class="callout">
       <strong>How to read this</strong>
-      <p><em>Still trading</em> / last buy·sell = what’s happening <u>now</u>. The dollar figure below is <u>already realized</u> — money they already took. It is not a promise they will keep winning.</p>
+      <p><em>Still trading</em> / last buy·sell = now. The $ below is <u>already banked</u> (past). Tap HoodScan only if you want the full trade tape.</p>
     </div>
 
     <div class="grid">
-      <div><span>Past realized PnL</span><b class="${(Number(pnl)||0)>=0?'up':'down'}">${esc(usd(pnl))}</b></div>
-      <div><span>Open positions</span><b>${esc(openCount || positions.length || '—')}</b></div>
-      <div><span>Wins / losses</span><b>${esc((detail && detail.wins) ?? fromList.wins ?? '—')} / ${esc((detail && detail.losses) ?? fromList.losses ?? '—')}</b></div>
-      <div><span>Avg hold</span><b>${esc(holdLabel((detail && detail.avgHoldSeconds) ?? fromList.avgHoldSeconds) || '—')}</b></div>
+      <div><span>Past realized PnL</span><b class="${pnl>=0?'up':'down'}">${esc(usd(pnl))}</b></div>
+      <div><span>Win rate</span><b>${esc(wr != null ? wr + '%' : '—')} <span class="meta">(${esc(it.wins ?? '—')}W / ${esc(it.losses ?? '—')}L)</span></b></div>
+      <div><span>Avg hold</span><b>${esc(hold || '—')}</b></div>
+      <div><span>Pace</span><b>${esc(it.tradesPerDay != null ? Number(it.tradesPerDay).toFixed(0) + '/day' : '—')}</b></div>
+      <div><span>Tokens traded</span><b>${esc(it.tokens ?? '—')}</b></div>
+      <div><span>Volume</span><b>${esc(usd(it.volumeUsd))}</b></div>
+      <div><span>Top / last token</span><b>$${esc(top.symbol || '?')}</b></div>
+      <div><span>Venues</span><b>${esc(venues)}</b></div>
     </div>
 
-    <a class="ext" href="${esc(HS)}/trader/${esc(addr)}" target="_blank" rel="noopener">Full history on HoodScan ↗</a>
+    <div class="actions">
+      <a class="btn primary extbtn" href="${esc(HS)}/trader/${esc(addr)}" target="_blank" rel="noopener">Full tape on HoodScan</a>
+      <a class="btn extbtn" href="${esc(HS)}/swaps?trader=${esc(addr)}" target="_blank" rel="noopener">Their swaps</a>
+    </div>
 
     <div class="labeler">
       <label>Your note</label>
       <input id="label-input" value="${esc(mine.join(', '))}" placeholder="still-hot, skip, cluster…">
       <button class="btn primary" type="button" data-save="${esc(addr)}">Save on this phone</button>
     </div>
-
-    ${recent.length ? `<h3>Recent swaps (proof of activity)</h3>
-      ${recent.slice(0, 12).map((r) => {
-        const sym = (r.token || {}).symbol || '?';
-        const side = (r.side || '').toLowerCase();
-        return `<div class="mini"><span class="${esc(side)}">${esc(side)} $${esc(sym)}</span><span>${esc(usd(r.usd))}</span></div>`;
-      }).join('')}` : ''}
-
-    ${positions.length ? `<h3>Open / leftover positions</h3>
-      ${positions.slice(0, 12).map((p) => {
-        const sym = (p.token || {}).symbol || '?';
-        return `<div class="mini"><span>$${esc(sym)}</span><span class="${(Number(p.unrealizedUsd)||0)>=0?'up':'down'}">u ${esc(usd(p.unrealizedUsd))} · r ${esc(usd(p.realizedUsd))}</span></div>`;
-      }).join('')}` : `<p class="meta">No open positions returned — may be flat.</p>`}
   </section>`;
 }
 
@@ -413,12 +314,11 @@ root.addEventListener('click', async (e) => {
     return;
   }
   if (t.dataset.open) {
-    await openTrader(t.dataset.open);
+    openTrader(t.dataset.open);
     return;
   }
   if (t.dataset.back !== undefined) {
     selected = null;
-    detail = null;
     error = null;
     render();
     return;
