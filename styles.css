@@ -216,12 +216,16 @@ body {
   font-weight: 650;
 }
 .grid b { font-size: 1.05rem; }
-.ext {
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+a.extbtn {
   display: inline-block;
-  margin: 4px 0 14px;
-  color: var(--live);
-  font-weight: 650;
   text-decoration: none;
+  text-align: center;
 }
 .labeler label {
   display: block;
